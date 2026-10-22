@@ -20,6 +20,7 @@ use axum::{Json, Router};
 pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/upload", put(upload))
+        .route("/media", put(crate::media::media))
         .with_state(state)
 }
 

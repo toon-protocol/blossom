@@ -11,6 +11,7 @@ use crate::holdings::Recorded;
 use crate::payment::Payment;
 use crate::state::{SharedState, now};
 use crate::sunset::{SUNSET, sunset_value};
+use axum::body::Bytes;
 use axum::extract::{Request, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -20,6 +21,7 @@ use axum::{Json, Router};
 pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/upload", put(upload))
+        .route("/mirror", put(crate::mirror::mirror))
         .with_state(state)
 }
 
@@ -55,6 +57,30 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
     }
 
     let content_type = acceptance::declared_type(&parts.headers, header::CONTENT_TYPE.as_str());
+    store(
+        &state,
+        bytes,
+        hash,
+        content_type,
+        authorization,
+        payment,
+        at,
+    )
+    .await
+}
+
+/// The part of a paid write every route shares: the acceptance check, the bytes, and the holding
+/// (new, or extended by the same rule), under the write lock. Answers with the descriptor and
+/// `Sunset`.
+pub(crate) async fn store(
+    state: &SharedState,
+    bytes: Bytes,
+    hash: BlobHash,
+    content_type: String,
+    authorization: Authorization,
+    payment: Payment,
+    at: u64,
+) -> Result<Response, ApiError> {
     let size = bytes.len() as u64;
     let candidate = Candidate {
         size,

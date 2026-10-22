@@ -68,7 +68,12 @@ because an event names it.
 - An operator total storage cap (`TOON_BLOB_STORAGE_CAP_BYTES`), with no default, keeps uploads off
   until it is set. Settings: `TOON_BLOB_MAX_BLOB_BYTES` (default about 1.9 MiB, over it is `413`) and
   `TOON_BLOB_ALLOWED_CONTENT_TYPES` (optional, comma-separated, `415` outside it); each has a flag.
-  Cap refusals are `507`. The preflight and the paid upload run one acceptance check.
+  Cap refusals are `507`. The preflight and the paid upload run one acceptance check, and so does
+  a mirror.
+- Mirror: `TOON_MIRROR_MAX_BYTES` (default about 1.9 MiB) cuts a fetch off while streaming, and
+  `TOON_MIRROR_ALLOWED_ORIGINS` (empty by default, comma-separated `scheme://host[:port]`) exempts
+  origins from the mirror guard. A guard refusal is `400`, a hash that is not the authorization's
+  `x` is `409`, an unreachable source is `502`.
 - Reports never remove anything. A takedown is `TOON_BLOCKED_BLOBS`, a list of blocked hashes
   read at startup (a malformed entry fails startup), as the relay's event blocklist is: it ends
   every holding, and the preflight and upload refuse the hash. There is no admin endpoint.

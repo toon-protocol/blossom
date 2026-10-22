@@ -13,6 +13,10 @@ pub enum ApiError {
     #[error("{0}")]
     Unauthorized(String),
     #[error("{0}")]
+    Conflict(String),
+    #[error("{0}")]
+    BadGateway(String),
+    #[error("{0}")]
     Forbidden(String),
     #[error("uploads go through TOON: send a paid request to the upload route on the connector")]
     UploadsGoThroughToon,
@@ -45,6 +49,8 @@ impl ApiError {
         match self {
             Self::PaymentStatement | Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::BadGateway(_) => StatusCode::BAD_GATEWAY,
             Self::Forbidden(_) | Self::UploadsGoThroughToon | Self::TakenDown => {
                 StatusCode::FORBIDDEN
             }

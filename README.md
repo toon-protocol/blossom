@@ -89,12 +89,14 @@ The blob app runs unchanged in either mode.
 
 ## Build and release
 
-Rust, on the relay's toolchain pin and `docs/rust-coding-standards.md`. CI checks the image two
-ways: [blossom-compliance](https://github.com/v0l/blossom-compliance) against a test-only proxy
-that adds a stated payment to the paid paths, and the app's own black-box suite (holdings,
-retention, the `403`, the mirror guard, takedown, the storage cap, the preflight). The own suite
-gates publishing `ghcr.io/toon-protocol/blossom`: a moving `:release` tag and immutable `:sha-*`
-tags on every green merge to `main`.
+Rust, on the relay's toolchain pin and `docs/rust-coding-standards.md`. CI builds the image once
+and runs two suites against that image: the app's own black-box suite (holdings, retention, the
+`403`, the mirror guard, takedown, the storage cap, the preflight) and
+[blossom-compliance](https://github.com/v0l/blossom-compliance) through a test-only proxy that adds a
+stated payment to the paid paths. Pull requests build and run both suites but never publish. On a
+push to `main` where both suites are green, the workflow pushes that same image to
+`ghcr.io/toon-protocol/blossom` as a moving `:release` tag and an immutable `:sha-<commit>` tag. A
+red suite publishes nothing.
 
 ## License
 

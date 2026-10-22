@@ -5,7 +5,6 @@
 //! picture still shows the right way up.
 
 use std::io::Cursor;
-
 use std::sync::PoisonError;
 use std::time::Duration;
 
@@ -101,7 +100,7 @@ pub fn optimize(bytes: &[u8], format: Format) -> Result<Optimized, ApiError> {
 }
 
 /// `PUT /media`: the payment statement and a `t=media` authorization whose `x` tag is the input's
-/// hash. Only the output is kept, held by the authorization's signer under the output's hash.
+/// hash. Only the output is kept, held by its owner under the output's hash.
 ///
 /// # Errors
 /// As the upload route, plus [`ApiError::NotAnImage`] for a body that is not an image and

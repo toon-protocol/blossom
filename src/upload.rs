@@ -1,4 +1,4 @@
-//! The write port: `PUT /upload`, reached only through the connector.
+//! The write port: `PUT /upload` and `PUT /media`, reached only through the connector.
 
 use std::sync::PoisonError;
 

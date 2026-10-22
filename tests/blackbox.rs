@@ -1042,7 +1042,7 @@ fn the_media_route_is_refused_when_the_acceptance_check_would_refuse() {
         assert_eq!(status(&put_media(&app, &Signer::random(), &input)), 415);
     }
     if let Some(app) = App::start_with(&["--storage-cap-bytes", "1000000000"]) {
-        // The output's hash is on the takedown list, so restart with it listed.
+        // Learn the output's hash, then restart with it on the takedown list.
         let signer = Signer::random();
         let output = put_media(&app, &signer, &input)
             .json::<serde_json::Value>()
@@ -1060,10 +1060,18 @@ fn the_media_route_is_refused_when_the_acceptance_check_would_refuse() {
             .unwrap();
         assert_eq!(status(&put_media(&app, &signer, &input)), 403);
     }
+    if let Some(app) = App::start_with(&[
+        "--storage-cap-bytes",
+        "1000000000",
+        "--blocked-blobs",
+        &sha256_hex(&input),
+    ]) {
+        assert_eq!(status(&put_media(&app, &Signer::random(), &input)), 403);
+    }
 }
 
 #[test]
-fn processing_too_slow_for_the_packet_deadline_is_refused_with_r00() {
+fn optimizing_too_slow_for_the_packet_deadline_is_refused_with_r00() {
     let Some(app) = App::start_with(&[
         "--storage-cap-bytes",
         "1000000000",

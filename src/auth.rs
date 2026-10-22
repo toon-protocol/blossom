@@ -1,0 +1,194 @@
+//! BUD-11 authorization: a kind 24242 Nostr event in `Authorization: Nostr <base64>`.
+
+use base64::Engine;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use k256::schnorr::signature::hazmat::PrehashVerifier;
+use k256::schnorr::{Signature, VerifyingKey};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+
+use crate::error::ApiError;
+use crate::hash::BlobHash;
+
+const AUTH_KIND: u64 = 24242;
+
+#[derive(Debug, Deserialize)]
+struct Event {
+    id: String,
+    pubkey: String,
+    created_at: u64,
+    kind: u64,
+    tags: Vec<Vec<String>>,
+    content: String,
+    sig: String,
+}
+
+/// A verified upload authorization: who signed it, and which blob hashes it covers.
+#[derive(Debug)]
+pub struct UploadAuthorization {
+    /// The signer's pubkey (64 hex characters). This is the blob's owner.
+    pub owner: String,
+    hashes: Vec<String>,
+}
+
+impl UploadAuthorization {
+    #[must_use]
+    pub fn covers(&self, hash: &BlobHash) -> bool {
+        self.hashes.iter().any(|x| x == hash.as_str())
+    }
+
+    /// Verifies the `Authorization` header value for an upload at time `now` (unix seconds).
+    ///
+    /// # Errors
+    /// [`ApiError::Unauthorized`] when the header is absent or malformed, the signature or id is
+    /// wrong, the kind is not 24242, `created_at` is in the future, `expiration` is missing or
+    /// past, `t` is not `upload`, or there is no `x` tag.
+    pub fn verify(header: Option<&str>, now: u64) -> Result<Self, ApiError> {
+        let denied = |why: &str| ApiError::Unauthorized(format!("invalid authorization: {why}"));
+        let header =
+            header.ok_or_else(|| ApiError::Unauthorized("authorization required".into()))?;
+        let encoded = header
+            .strip_prefix("Nostr ")
+            .ok_or_else(|| denied("expected `Nostr <base64 event>`"))?
+            .trim();
+        let json = STANDARD
+            .decode(encoded)
+            .or_else(|_| URL_SAFE_NO_PAD.decode(encoded.trim_end_matches('=')))
+            .map_err(|_| denied("not base64"))?;
+        let event: Event = serde_json::from_slice(&json).map_err(|_| denied("not an event"))?;
+
+        if event.kind != AUTH_KIND {
+            return Err(denied("kind must be 24242"));
+        }
+        if event.created_at > now {
+            return Err(denied("created_at is in the future"));
+        }
+        let tag = |name: &'static str| {
+            event
+                .tags
+                .iter()
+                .filter(move |t| t.first().map(String::as_str) == Some(name))
+        };
+        let expiration = tag("expiration")
+            .find_map(|t| t.get(1)?.parse::<u64>().ok())
+            .ok_or_else(|| denied("no expiration tag"))?;
+        if expiration <= now {
+            return Err(denied("expired"));
+        }
+        if !tag("t").any(|t| t.get(1).map(String::as_str) == Some("upload")) {
+            return Err(denied("not authorized for upload"));
+        }
+        let hashes: Vec<String> = tag("x")
+            .filter_map(|t| t.get(1))
+            .map(|x| x.to_ascii_lowercase())
+            .collect();
+        if hashes.is_empty() {
+            return Err(denied("no x tag"));
+        }
+        verify_signature(&event).map_err(denied)?;
+        Ok(Self {
+            owner: event.pubkey.to_ascii_lowercase(),
+            hashes,
+        })
+    }
+}
+
+fn verify_signature(event: &Event) -> Result<(), &'static str> {
+    let serialized = serde_json::to_string(&(
+        0,
+        &event.pubkey,
+        event.created_at,
+        event.kind,
+        &event.tags,
+        &event.content,
+    ))
+    .map_err(|_| "unserializable event")?;
+    let id = Sha256::digest(serialized.as_bytes());
+    if hex::decode(&event.id).ok().as_deref() != Some(&id[..]) {
+        return Err("event id does not match its content");
+    }
+    let key = hex::decode(&event.pubkey)
+        .ok()
+        .and_then(|b| VerifyingKey::from_bytes(&b).ok())
+        .ok_or("bad pubkey")?;
+    let sig = hex::decode(&event.sig)
+        .ok()
+        .and_then(|b| Signature::try_from(b.as_slice()).ok())
+        .ok_or("bad signature encoding")?;
+    key.verify_prehash(&id, &sig)
+        .map_err(|_| "signature does not verify")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k256::schnorr::SigningKey;
+    use k256::schnorr::signature::hazmat::PrehashSigner;
+
+    const NOW: u64 = 1_000_000;
+
+    fn header(kind: u64, tags: &[[&str; 2]], created_at: u64, tamper: bool) -> String {
+        let key = SigningKey::from_bytes(&[7u8; 32]).unwrap();
+        let pubkey = hex::encode(key.verifying_key().to_bytes());
+        let tags: Vec<Vec<String>> = tags
+            .iter()
+            .map(|t| t.iter().map(|s| (*s).to_owned()).collect())
+            .collect();
+        let content = "Upload";
+        let id = Sha256::digest(
+            serde_json::to_string(&(0, &pubkey, created_at, kind, &tags, content)).unwrap(),
+        );
+        let sig: Signature = key.sign_prehash(&id).unwrap();
+        let content = if tamper { "Tampered" } else { content };
+        let event = serde_json::json!({
+            "id": hex::encode(id), "pubkey": pubkey, "created_at": created_at, "kind": kind,
+            "tags": tags, "content": content, "sig": hex::encode(sig.to_bytes()),
+        });
+        format!("Nostr {}", STANDARD.encode(event.to_string()))
+    }
+
+    fn good_tags() -> [[&'static str; 2]; 3] {
+        [["t", "upload"], ["x", "ab"], ["expiration", "2000000"]]
+    }
+
+    #[test]
+    fn accepts_a_valid_authorization() {
+        let h = header(AUTH_KIND, &good_tags(), NOW - 1, false);
+        let auth = UploadAuthorization::verify(Some(&h), NOW).unwrap();
+        assert_eq!(auth.owner.len(), 64);
+    }
+
+    #[test]
+    fn refuses_each_defect() {
+        let v = |h: &str| UploadAuthorization::verify(Some(h), NOW).is_err();
+        assert!(UploadAuthorization::verify(None, NOW).is_err());
+        assert!(v("Bearer x"));
+        assert!(v(&header(AUTH_KIND, &good_tags(), NOW - 1, true)));
+        assert!(v(&header(1, &good_tags(), NOW - 1, false)));
+        assert!(v(&header(AUTH_KIND, &good_tags(), NOW + 5, false)));
+        assert!(v(&header(
+            AUTH_KIND,
+            &[["t", "delete"], ["x", "ab"], ["expiration", "2000000"]],
+            NOW - 1,
+            false
+        )));
+        assert!(v(&header(
+            AUTH_KIND,
+            &[["t", "upload"], ["x", "ab"], ["expiration", "999"]],
+            NOW - 1,
+            false
+        )));
+        assert!(v(&header(
+            AUTH_KIND,
+            &[["t", "upload"], ["x", "ab"]],
+            NOW - 1,
+            false
+        )));
+        assert!(v(&header(
+            AUTH_KIND,
+            &[["t", "upload"], ["expiration", "2000000"]],
+            NOW - 1,
+            false
+        )));
+    }
+}

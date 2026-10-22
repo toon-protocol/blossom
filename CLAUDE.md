@@ -25,7 +25,8 @@ labelled `wayfinder:*` are skipped (`.sandcastle/ready-issues.ts`). A human merg
 **The gate reads its steps from CI.** The gate is the `run:` steps of the `gate` job
 (else the `checks` job) of `.github/workflows/ci.yml` **on `main`**, in order. If there is
 no `ci.yml`, no such job, or no runnable step, the gate runs nothing and logs that loudly.
-Today there is no `.github/workflows/ci.yml`, so the gate runs nothing and the review is the only check.
+Today the gate is the `gate` job of `.github/workflows/ci.yml`: formatting, clippy, unit tests
+and the black-box suite against the binary, with no Docker.
 Naming the first CI job `gate` (or `checks`) makes the factory gate on it with no further change.
 The rule lives in one place, `gateFromCi` in `.sandcastle/run-gate.ts`, tested by
 `.sandcastle/run-gate.test.ts`.

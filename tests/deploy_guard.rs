@@ -1,4 +1,4 @@
-//! Guards on the deployment files: the compose files, `connector.toml` and the Caddyfile.
+//! Guards on the bundle files: the compose files, `connector.toml` and the Caddyfile.
 //! They read the files as text and parse them; nothing here needs Docker.
 
 use std::fs;

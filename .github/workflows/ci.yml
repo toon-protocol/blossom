@@ -19,7 +19,7 @@ jobs:
       - run: cargo test --locked --lib --bins
       # The black-box suite starts the binary directly and talks only to its two ports.
       - run: cargo test --locked --test blackbox
-      # The deployment files: compose, connector.toml and the Caddyfile.
+      # The bundle files: compose, connector.toml and the Caddyfile.
       - run: cargo test --locked --test deploy_guard
 
   image:

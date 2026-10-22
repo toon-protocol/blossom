@@ -77,11 +77,17 @@ is a second box; then Garage or SeaweedFS, not MinIO.
 
 Two modes, the same as the store's:
 
-- **Its own bundle**: `deploy/docker-compose.yml` stands up a connector, the blob app and Caddy,
-  with the three routes in its `connector.toml`.
-- **Shared edge**: `deploy/docker-compose.shared-edge.yml` turns the blob app's own connector off
-  and joins an `edge-blossom` network. The host bundle's connector joins that network, and its
-  `connector.toml` and Caddyfile carry the blob app's routes and public host.
+- **Its own bundle**: `deploy/docker-compose.yml` stands up a connector (on an immutable pin of the
+  stock image), the blob app and Caddy. Its read-only `deploy/connector.toml` carries the three
+  routes at their devnet prices, each pointing at its handler on the write port. Blobs are kept on
+  the named volume `blob_data`. Only Caddy publishes ports; the write port is never published, and
+  `deploy/Caddyfile` proxies only the public port's methods and paths (and `/ilp` to the connector).
+- **Shared edge**: `deploy/docker-compose.shared-edge.yml` turns the blob app's own connector (and
+  Caddy) off and joins an `edge-blossom` network, leaving the blob app's image and settings alone.
+  The host bundle's connector joins that network, and its `connector.toml` and Caddyfile carry the
+  blob app's routes and public host.
+
+`tests/deploy_guard.rs` checks these files.
 
 The blob app runs unchanged in either mode.
 

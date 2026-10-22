@@ -16,15 +16,16 @@ pub struct Candidate {
 }
 
 /// # Errors
-/// [`ApiError::Blocked`] for a hash the operator took down, [`ApiError::TooLarge`] over the size limit, [`ApiError::UnsupportedType`] outside the
-/// allowlist, [`ApiError::StorageFull`] when the cap is unset or the blob's bytes would not fit.
+/// [`ApiError::TakenDown`] for a hash the operator took down, [`ApiError::TooLarge`] over the
+/// size limit, [`ApiError::UnsupportedType`] outside the allowlist, [`ApiError::StorageFull`] when
+/// the cap is unset or the blob's bytes would not fit.
 pub fn check(state: &AppState, candidate: &Candidate, now: u64) -> Result<(), ApiError> {
     if candidate
         .hash
         .as_ref()
-        .is_some_and(|h| state.blocked.contains(h))
+        .is_some_and(|h| state.taken_down.contains(h))
     {
-        return Err(ApiError::Blocked);
+        return Err(ApiError::TakenDown);
     }
     let config = &state.config;
     if candidate.size > config.max_blob_bytes {

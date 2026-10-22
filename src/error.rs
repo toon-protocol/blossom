@@ -29,7 +29,7 @@ pub enum ApiError {
     )]
     StorageFull,
     #[error("this blob is not accepted on this server")]
-    Blocked,
+    TakenDown,
     #[error("range not satisfiable")]
     RangeNotSatisfiable(u64),
     #[error("internal error")]
@@ -45,7 +45,7 @@ impl ApiError {
         match self {
             Self::PaymentStatement | Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-            Self::Forbidden(_) | Self::UploadsGoThroughToon | Self::Blocked => {
+            Self::Forbidden(_) | Self::UploadsGoThroughToon | Self::TakenDown => {
                 StatusCode::FORBIDDEN
             }
             Self::NotFound => StatusCode::NOT_FOUND,

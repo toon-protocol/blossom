@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -67,12 +68,12 @@ impl Config {
         self.public_url.trim_end_matches('/')
     }
 
-    /// The blocked hashes, without repeats. An empty setting (`TOON_BLOCKED_BLOBS=`) lists nothing.
+    /// The hashes to take down. An empty setting (`TOON_BLOCKED_BLOBS=`) lists nothing.
     ///
     /// # Errors
     /// Names the first entry that is not a sha256 hash.
-    pub fn blocked(&self) -> Result<Vec<BlobHash>, String> {
-        let mut blocked: Vec<BlobHash> = Vec::new();
+    pub fn taken_down(&self) -> Result<HashSet<BlobHash>, String> {
+        let mut taken_down = HashSet::new();
         for entry in self.blocked_blobs.iter().flatten() {
             let entry = entry.trim();
             if entry.is_empty() {
@@ -80,11 +81,9 @@ impl Config {
             }
             let hash = BlobHash::parse(entry)
                 .ok_or_else(|| format!("TOON_BLOCKED_BLOBS: {entry:?} is not a sha256 hash"))?;
-            if !blocked.contains(&hash) {
-                blocked.push(hash);
-            }
+            taken_down.insert(hash);
         }
-        Ok(blocked)
+        Ok(taken_down)
     }
 
     /// This server's lowercase domain name, from the public URL: no scheme, port or path.
@@ -120,15 +119,16 @@ mod tests {
     #[test]
     fn blocked_blobs_are_hashes_and_a_malformed_entry_is_an_error() {
         let hash = BlobHash::of(b"x");
-        let blocked = |list: &str| {
-            Config::parse_from(["blossom", "--public-url", "u", "--blocked-blobs", list]).blocked()
+        let taken_down = |list: &str| {
+            Config::parse_from(["blossom", "--public-url", "u", "--blocked-blobs", list])
+                .taken_down()
         };
-        assert_eq!(blocked(""), Ok(vec![]));
+        assert_eq!(taken_down(""), Ok(HashSet::new()));
         let upper = hash.as_str().to_uppercase();
         assert_eq!(
-            blocked(&format!("{hash}, {upper},")),
-            Ok(vec![hash.clone()])
+            taken_down(&format!("{hash}, {upper},")),
+            Ok(HashSet::from([hash.clone()]))
         );
-        assert!(blocked(&format!("{hash},nothex")).is_err());
+        assert!(taken_down(&format!("{hash},nothex")).is_err());
     }
 }

@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{App, Signer, now, random_blob, sha256_hex, status};
+use common::{App, OPEN_CAP, Signer, now, random_blob, sha256_hex, status};
 use reqwest::blocking::Response;
 
 fn header(response: &Response, name: &str) -> String {
@@ -827,8 +827,6 @@ fn a_delete_of_a_blob_no_one_holds_is_404() {
     assert_eq!(status(&response), 404);
 }
 
-const OPEN_CAP: [&str; 2] = ["--storage-cap-bytes", "1000000000"];
-
 #[test]
 fn a_listed_blob_is_404_and_gone_from_every_owners_list_after_a_restart() {
     let Some(app) = App::start_with(&OPEN_CAP) else {
@@ -844,14 +842,9 @@ fn a_listed_blob_is_404_and_gone_from_every_owners_list_after_a_restart() {
 
     let blocked = format!("{},{}", sha256_hex(b"unseen"), hash.to_uppercase());
     let app = app
-        .restart_with(&[
-            "--storage-cap-bytes",
-            "1000000000",
-            "--blocked-blobs",
-            &blocked,
-        ])
+        .restart_with(&[OPEN_CAP[0], OPEN_CAP[1], "--blocked-blobs", &blocked])
         .unwrap();
-    assert_eq!(read_status(&app, &hash).0, 404);
+    assert_eq!(read_status(&app, &hash), (404, 404));
     for owner in [&a, &b] {
         assert!(
             listed(&app, &owner.pubkey())
@@ -867,12 +860,7 @@ fn a_listed_blob_is_404_and_gone_from_every_owners_list_after_a_restart() {
 fn the_preflight_and_the_paid_upload_refuse_a_listed_hash() {
     let blob = random_blob(100);
     let hash = sha256_hex(&blob);
-    let Some(app) = App::start_with(&[
-        "--storage-cap-bytes",
-        "1000000000",
-        "--blocked-blobs",
-        &hash,
-    ]) else {
+    let Some(app) = App::start_with(&[OPEN_CAP[0], OPEN_CAP[1], "--blocked-blobs", &hash]) else {
         return;
     };
     let preflight = app
@@ -893,29 +881,42 @@ fn the_preflight_and_the_paid_upload_refuse_a_listed_hash() {
         .send()
         .unwrap();
     assert_eq!(status(&upload), 403);
-    assert_eq!(read_status(&app, &hash).0, 404);
+    assert_eq!(read_status(&app, &hash), (404, 404));
     assert!(listed(&app, &signer.pubkey()).is_empty());
 }
 
 #[test]
 fn a_malformed_blocked_blobs_entry_stops_the_app_starting() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_blossom"))
-        .args([
-            "--public-url",
-            "http://blobs.test",
-            "--blocked-blobs",
-            "not-a-hash",
-        ])
-        .args([
-            "--write-addr",
-            "127.0.0.1:0",
-            "--public-addr",
-            "127.0.0.1:0",
-        ])
-        .args(["--storage-dir"])
-        .arg(tempfile::tempdir().unwrap().path())
+    let storage = tempfile::tempdir().unwrap();
+    let output = App::command(storage.path(), &["--blocked-blobs", "not-a-hash"])
         .output()
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("TOON_BLOCKED_BLOBS"));
+}
+
+#[test]
+fn the_takedown_list_is_logged_at_startup() {
+    let hash = sha256_hex(b"listed");
+    let storage = tempfile::tempdir().unwrap();
+    let mut child = App::command(storage.path(), &["--blocked-blobs", &hash])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = std::io::BufReader::new(child.stderr.take().unwrap());
+    let (found, logged) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let line = std::io::BufRead::lines(stderr)
+            .map_while(Result::ok)
+            .find(|line| line.contains("in force") && line.contains(&hash));
+        let _ = found.send(line);
+    });
+    let logged = logged.recv_timeout(std::time::Duration::from_secs(10));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        matches!(logged, Ok(Some(_))),
+        "the takedown list was not logged"
+    );
 }

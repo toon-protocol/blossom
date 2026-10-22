@@ -54,27 +54,17 @@ async fn preflight(
     State(state): State<SharedState>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    let text = |name: &str| {
-        headers
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .map(str::trim)
-    };
-    let size = text("x-content-length")
-        .ok_or_else(|| ApiError::BadRequest("X-Content-Length is required".into()))?
-        .parse()
-        .map_err(|_| ApiError::BadRequest("X-Content-Length is not a number".into()))?;
-    let content_type = acceptance::declared_type(&headers, "x-content-type");
-    let hash = text("x-sha-256")
-        .map(|s| {
-            BlobHash::parse(s)
-                .ok_or_else(|| ApiError::BadRequest("X-SHA-256 is not a sha256 hash".into()))
-        })
-        .transpose()?;
+    let size = headers
+        .get("x-content-length")
+        .ok_or(ApiError::LengthRequired)?
+        .to_str()
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .ok_or_else(|| ApiError::BadRequest("X-Content-Length is not a number".into()))?;
     let candidate = Candidate {
-        size: Some(size),
-        content_type: Some(content_type),
-        hash,
+        size,
+        content_type: acceptance::declared_type(&headers, "x-content-type"),
+        hash: acceptance::claimed_hash(&headers)?,
     };
     tokio::task::spawn_blocking(move || acceptance::check(&state, &candidate, now()))
         .await

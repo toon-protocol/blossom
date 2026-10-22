@@ -590,3 +590,20 @@ fn the_preflight_is_free_and_stores_nothing() {
     assert_eq!(preflight(&app, &body, "text/plain").0, 200);
     assert_eq!(status(&app.read(&sha256_hex(&body)).send().unwrap()), 404);
 }
+
+#[test]
+fn a_preflight_without_a_length_is_411_and_a_bad_hash_is_400() {
+    let app = App::start();
+    let no_length = app
+        .client
+        .head(format!("{}/upload", app.public_url))
+        .header("x-content-type", "text/plain")
+        .send()
+        .unwrap();
+    assert_eq!(status(&no_length), 411);
+    let bad_hash = app
+        .preflight(100, "text/plain", Some("not-a-hash"))
+        .send()
+        .unwrap();
+    assert_eq!(status(&bad_hash), 400);
+}

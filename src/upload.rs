@@ -4,7 +4,7 @@ use std::sync::PoisonError;
 
 use axum::body::to_bytes;
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::put;
 use axum::{Json, Router};
@@ -51,7 +51,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         at,
         &state.config.domain(),
     )?;
-    let claimed = claimed_hash(&parts.headers)?;
+    let claimed = acceptance::claimed_hash(&parts.headers)?;
     if let Some(claimed) = &claimed
         && !authorization.covers(claimed)
     {
@@ -80,8 +80,8 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
     let content_type = acceptance::declared_type(&parts.headers, header::CONTENT_TYPE.as_str());
     let size = bytes.len() as u64;
     let candidate = Candidate {
-        size: Some(size),
-        content_type: Some(content_type.clone()),
+        size,
+        content_type: content_type.clone(),
         hash: Some(hash.clone()),
     };
     let retention = state.config.retention_secs;
@@ -142,18 +142,6 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
     }
     response.headers_mut().insert(SUNSET, sunset_value(sunset));
     Ok(response)
-}
-
-fn claimed_hash(headers: &HeaderMap) -> Result<Option<BlobHash>, ApiError> {
-    headers
-        .get("x-sha-256")
-        .map(|v| {
-            v.to_str()
-                .ok()
-                .and_then(|s| BlobHash::parse(s.trim()))
-                .ok_or_else(|| ApiError::BadRequest("X-SHA-256 is not a sha256 hash".into()))
-        })
-        .transpose()
 }
 
 fn blob_url(public_url: &str, hash: &BlobHash, content_type: &str) -> String {

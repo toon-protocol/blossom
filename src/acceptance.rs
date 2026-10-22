@@ -7,11 +7,11 @@ use crate::error::ApiError;
 use crate::hash::BlobHash;
 use crate::state::AppState;
 
-/// What a client says it will upload. A field the client did not state is not checked.
-#[derive(Clone, Debug, Default)]
+/// What a client says it will upload. A preflight that states no hash is checked as a new blob.
+#[derive(Clone, Debug)]
 pub struct Candidate {
-    pub size: Option<u64>,
-    pub content_type: Option<String>,
+    pub size: u64,
+    pub content_type: String,
     pub hash: Option<BlobHash>,
 }
 
@@ -20,9 +20,7 @@ pub struct Candidate {
 /// allowlist, [`ApiError::StorageFull`] when the cap is unset or the blob's bytes would not fit.
 pub fn check(state: &AppState, candidate: &Candidate, now: u64) -> Result<(), ApiError> {
     let config = &state.config;
-    if let Some(size) = candidate.size
-        && size > config.max_blob_bytes
-    {
+    if candidate.size > config.max_blob_bytes {
         return Err(ApiError::TooLarge(config.max_blob_bytes));
     }
     // An empty setting (`TOON_BLOB_ALLOWED_CONTENT_TYPES=`) lists nothing, so it is no allowlist.
@@ -33,13 +31,8 @@ pub fn check(state: &AppState, candidate: &Candidate, now: u64) -> Result<(), Ap
         .map(|a| self::essence(a))
         .filter(|a| !a.is_empty())
         .collect();
-    if let Some(content_type) = &candidate.content_type
-        && !allowed.is_empty()
-    {
-        let essence = self::essence(content_type);
-        if !allowed.contains(&essence) {
-            return Err(ApiError::UnsupportedType(content_type.clone()));
-        }
+    if !allowed.is_empty() && !allowed.contains(&self::essence(&candidate.content_type)) {
+        return Err(ApiError::UnsupportedType(candidate.content_type.clone()));
     }
     let cap = config.storage_cap_bytes.ok_or(ApiError::StorageFull)?;
     // Bytes already kept add nothing, so extending a holding is never refused for space.
@@ -53,7 +46,7 @@ pub fn check(state: &AppState, candidate: &Candidate, now: u64) -> Result<(), Ap
     };
     if !already_kept {
         let kept = state.holdings.kept_bytes(now).map_err(ApiError::internal)?;
-        if kept.saturating_add(candidate.size.unwrap_or(0)) > cap {
+        if kept.saturating_add(candidate.size) > cap {
             return Err(ApiError::StorageFull);
         }
     }
@@ -80,4 +73,21 @@ pub fn declared_type(headers: &HeaderMap, name: &str) -> String {
         .filter(|v| !v.is_empty())
         .unwrap_or("application/octet-stream")
         .to_owned()
+}
+
+/// The hash a client states in `X-SHA-256`, if any. The preflight and the paid upload both refuse
+/// a header that is not a sha256 hash.
+///
+/// # Errors
+/// [`ApiError::BadRequest`] when the header is not a sha256 hash.
+pub fn claimed_hash(headers: &HeaderMap) -> Result<Option<BlobHash>, ApiError> {
+    headers
+        .get("x-sha-256")
+        .map(|v| {
+            v.to_str()
+                .ok()
+                .and_then(|s| BlobHash::parse(s.trim()))
+                .ok_or_else(|| ApiError::BadRequest("X-SHA-256 is not a sha256 hash".into()))
+        })
+        .transpose()
 }

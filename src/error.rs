@@ -14,6 +14,8 @@ pub enum ApiError {
     UploadsGoThroughToon,
     #[error("blob not found")]
     NotFound,
+    #[error("X-Content-Length is required")]
+    LengthRequired,
     #[error("blob is larger than the {0} byte limit")]
     TooLarge(u64),
     #[error("content type {0} is not allowed on this server")]
@@ -39,6 +41,7 @@ impl ApiError {
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             Self::UploadsGoThroughToon => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
+            Self::LengthRequired => StatusCode::LENGTH_REQUIRED,
             Self::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::StorageFull => StatusCode::INSUFFICIENT_STORAGE,

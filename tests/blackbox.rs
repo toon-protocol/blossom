@@ -598,9 +598,16 @@ fn a_blob_over_the_size_limit_gets_413_from_the_preflight_and_the_upload() {
 fn the_default_size_limit_is_just_under_the_connectors_2_mib_cap() {
     let app = App::start();
     let limit = 2 * 1024 * 1024;
-    let just_under_2_mib = app.preflight(limit - 1, "text/plain", None).send().unwrap();
+    let hash = sha256_hex(b"any");
+    let just_under_2_mib = app
+        .preflight(limit - 1, "text/plain", Some(&hash))
+        .send()
+        .unwrap();
     assert_eq!(status(&just_under_2_mib), 413);
-    let fits = app.preflight(1_900_000, "text/plain", None).send().unwrap();
+    let fits = app
+        .preflight(1_900_000, "text/plain", Some(&hash))
+        .send()
+        .unwrap();
     assert_eq!(status(&fits), 200);
 }
 
@@ -644,7 +651,7 @@ fn the_preflight_is_free_and_stores_nothing() {
 }
 
 #[test]
-fn a_preflight_without_a_length_is_411_and_a_bad_hash_is_400() {
+fn a_preflight_without_a_length_is_411_and_a_missing_or_bad_hash_is_400() {
     let app = App::start();
     let no_length = app
         .client
@@ -653,6 +660,8 @@ fn a_preflight_without_a_length_is_411_and_a_bad_hash_is_400() {
         .send()
         .unwrap();
     assert_eq!(status(&no_length), 411);
+    let no_hash = app.preflight(100, "text/plain", None).send().unwrap();
+    assert_eq!(status(&no_hash), 400);
     let bad_hash = app
         .preflight(100, "text/plain", Some("not-a-hash"))
         .send()

@@ -75,6 +75,11 @@
     "surface": "unobservable"
   },
   {
+    "bud": "BUD-06",
+    "case": "HEAD /upload with valid headers: HEAD /upload returns no body",
+    "surface": "unobservable"
+  },
+  {
     "bud": "BUD-02",
     "case": "Additional descriptor fields (optional): descriptor may have magnet field",
     "surface": "optional"

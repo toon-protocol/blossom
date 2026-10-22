@@ -59,6 +59,7 @@ pub fn router(state: SharedState) -> Router {
 }
 
 /// BUD-06: runs the paid upload's acceptance check on the headers a client would send, for free.
+/// `X-SHA-256` is required, so a blob already kept gets the answer its paid upload would.
 async fn preflight(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -73,7 +74,10 @@ async fn preflight(
     let candidate = Candidate {
         size,
         content_type: acceptance::declared_type(&headers, "x-content-type"),
-        hash: acceptance::claimed_hash(&headers)?,
+        hash: Some(
+            acceptance::claimed_hash(&headers)?
+                .ok_or_else(|| ApiError::BadRequest("X-SHA-256 is required".into()))?,
+        ),
     };
     tokio::task::spawn_blocking(move || acceptance::check(&state, &candidate, now()))
         .await

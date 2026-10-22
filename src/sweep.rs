@@ -14,7 +14,16 @@ pub fn sweep_once(state: &SharedState) -> Result<usize, Box<dyn std::error::Erro
         .write_lock
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    let unheld = state.holdings.sweep(now())?;
+    collect_unheld(state, now())
+}
+
+/// Ends holdings expired at `now` and deletes the bytes of every blob left unheld. The caller
+/// holds [`crate::state::AppState::write_lock`].
+///
+/// # Errors
+/// Fails on a database or file error; the next pass retries what was missed.
+pub fn collect_unheld(state: &SharedState, now: u64) -> Result<usize, Box<dyn std::error::Error>> {
+    let unheld = state.holdings.sweep(now)?;
     for hash in &unheld {
         state.files.remove(hash)?;
         state.holdings.forget(hash)?;

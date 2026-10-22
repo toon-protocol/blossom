@@ -1,5 +1,7 @@
+use axum::body::{Body, Bytes, to_bytes};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use http_body_util::LengthLimitError;
 
 /// A refusal, rendered with BUD-01's `X-Reason` header and the same text as the body.
 #[derive(Debug, thiserror::Error)]
@@ -10,6 +12,8 @@ pub enum ApiError {
     BadRequest(String),
     #[error("{0}")]
     Unauthorized(String),
+    #[error("{0}")]
+    Forbidden(String),
     #[error("uploads go through TOON: send a paid request to the upload route on the connector")]
     UploadsGoThroughToon,
     #[error("blob not found")]
@@ -39,7 +43,7 @@ impl ApiError {
         match self {
             Self::PaymentStatement | Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-            Self::UploadsGoThroughToon => StatusCode::FORBIDDEN,
+            Self::Forbidden(_) | Self::UploadsGoThroughToon => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::LengthRequired => StatusCode::LENGTH_REQUIRED,
             Self::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
@@ -68,4 +72,20 @@ impl IntoResponse for ApiError {
         }
         response
     }
+}
+
+/// Reads a request body of at most `limit` bytes.
+///
+/// # Errors
+/// [`ApiError::TooLarge`] for a body over `limit`, [`ApiError::BadRequest`] for one that cannot be
+/// read.
+pub async fn read_body(body: Body, limit: usize) -> Result<Bytes, ApiError> {
+    to_bytes(body, limit).await.map_err(|e| {
+        let inner = e.into_inner();
+        if inner.is::<LengthLimitError>() {
+            ApiError::TooLarge(u64::try_from(limit).unwrap_or(u64::MAX))
+        } else {
+            ApiError::BadRequest(format!("could not read the body: {inner}"))
+        }
+    })
 }

@@ -1,0 +1,62 @@
+# The blob app's own bundle: a connector, the blob app and Caddy.
+#
+#   internet ──▶ Caddy :443 ──┬──▶ connector :4000 ──▶ blossom :3001  (write port, paid routes)
+#                             └──▶ blossom   :3000                    (public port, free)
+#
+# Only Caddy publishes ports. The write port is never published, and Caddy never proxies to it.
+# Bring it up with signer.key and settlement.key beside this file (uid 10001 must read them):
+#   DOMAIN=blobs.example.com STORAGE_CAP_BYTES=50000000000 docker compose up -d
+# The blob app keeps uploads off until it has a total storage cap, so the bundle asks for one.
+
+name: blossom
+
+services:
+  connector:
+    # An immutable pin: it moves by a reviewed commit here, never by a floating tag.
+    image: ghcr.io/toon-protocol/connector:rust-2026.09.29.1
+    command: ['/app/config/connector.toml']
+    volumes:
+      - ./connector.toml:/app/config/connector.toml:ro
+      - ./signer.key:/app/data/signer.key:ro
+      - ./settlement.key:/app/data/settlement.key:ro
+      - connector_state:/app/state
+    expose: ['4000']
+    healthcheck:
+      # 127.0.0.1, never localhost: the listener is IPv4-only.
+      test: ['CMD-SHELL', 'wget -q --spider http://127.0.0.1:4000/ilp/identity || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  blossom:
+    image: ghcr.io/toon-protocol/blossom:release
+    environment:
+      TOON_BLOB_PUBLIC_URL: https://${DOMAIN:?set DOMAIN to the public host}
+      TOON_BLOB_STORAGE_CAP_BYTES: ${STORAGE_CAP_BYTES:?set STORAGE_CAP_BYTES to the total bytes of blobs to keep}
+    # No `ports:`. The write port (3001) is reached by the connector over the compose network only.
+    expose: ['3000', '3001']
+    volumes:
+      - blob_data:/data
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN to the public host}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - blossom
+      - connector
+    restart: unless-stopped
+
+volumes:
+  connector_state:
+  blob_data:
+  caddy_data:

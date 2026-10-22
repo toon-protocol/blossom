@@ -1,0 +1,36 @@
+# The blob app's connector: three paid routes, each a handler on the blob app's write port.
+# Mounted read-only. The write port (3001) is reachable only over the compose network.
+client_edge_addr = "0.0.0.0:4000"
+state_dir        = "/app/state"
+
+[signer]
+key_file = "/app/data/signer.key"
+
+# Devnet prices, in the settlement asset's smallest unit.
+[[routes]]
+prefix      = "g.toon.blossom.upload"
+handler_url = "http://blossom:3001/upload"
+price       = { base = 1000, per_kib = 10 }
+
+# Flat: buys a blob of up to 1.9 MiB.
+[[routes]]
+prefix      = "g.toon.blossom.mirror"
+handler_url = "http://blossom:3001/mirror"
+price       = 25000
+
+[[routes]]
+prefix      = "g.toon.blossom.media"
+handler_url = "http://blossom:3001/media"
+price       = { base = 1000, per_kib = 10 }
+
+[settlement.evm]
+rpc_url                = "https://base-sepolia-rpc.publicnode.com"
+token_address          = "0x0C996d7c934c79a6255254875607Fe69df25C0E1" # USDC (6dp)
+decimals               = 6
+asset_eip712_name      = "USDC"
+asset_eip712_version   = "2"
+asset_transfer_method  = "eip3009"
+facilitator_url        = "https://onboard.devnet.toonprotocol.dev"
+
+[settlement.evm.key]
+key_file = "/app/data/settlement.key"

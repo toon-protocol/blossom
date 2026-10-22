@@ -19,14 +19,18 @@ pub struct BlobInfo {
 }
 
 /// What a paid upload recorded: the blob as first recorded (a later upload of the same bytes keeps
-/// the first `uploaded` and type) and the expiry of this owner's holding.
+/// the first `uploaded` and type while any holding on it is live), the expiry of this owner's
+/// holding, and the blob's sunset.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recorded {
-    /// Whether this call stored the blob's bytes for the first time (no `blobs` row existed for them).
+    /// Whether this call recorded the blob afresh: no `blobs` row existed for it, or none of its
+    /// holdings was live.
     pub created: bool,
     pub content_type: String,
     pub uploaded: u64,
     pub expires_at: u64,
+    /// The latest expiry across the blob's live holdings, this one included.
+    pub sunset: u64,
 }
 
 pub struct Holdings {
@@ -67,8 +71,9 @@ impl Holdings {
     }
 
     /// Records a paid upload as the owner's holding on the blob. The holding's expiry becomes
-    /// `max(now, current expiry) + retention`. The payer, amount and chain are kept in their own
-    /// columns, apart from the owner.
+    /// `max(now, current expiry) + retention`. A blob with no live holding left is recorded afresh,
+    /// as if the sweep had already run. The payer, amount and chain are kept in their own columns,
+    /// apart from the owner.
     ///
     /// # Errors
     /// Fails on a database error; nothing is recorded then.
@@ -86,7 +91,13 @@ impl Holdings {
         let mut db = self.db();
         let tx = db.transaction()?;
         let created = tx.execute(
-            "INSERT OR IGNORE INTO blobs (sha256, size, content_type, uploaded) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO blobs (sha256, size, content_type, uploaded) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (sha256) DO UPDATE SET
+                 size = excluded.size, content_type = excluded.content_type,
+                 uploaded = excluded.uploaded
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM holdings WHERE sha256 = excluded.sha256 AND expires_at > ?4
+             )",
             params![hash.as_str(), size, content_type, now],
         )? == 1;
         let (content_type, uploaded): (String, u64) = tx.query_row(
@@ -117,13 +128,50 @@ impl Holdings {
                 payment.chain
             ],
         )?;
+        let sunset: u64 = tx.query_row(
+            "SELECT MAX(expires_at) FROM holdings WHERE sha256 = ?1",
+            params![hash.as_str()],
+            |row| row.get(0),
+        )?;
         tx.commit()?;
         Ok(Recorded {
             created,
             content_type,
             uploaded,
             expires_at,
+            sunset,
         })
+    }
+
+    /// Ends the holdings that expired at or before `now` and returns every blob left with none, so
+    /// their bytes can be deleted and then the blobs forgotten. A blob stays listed until it is
+    /// forgotten, so a pass that fails part-way is finished by the next.
+    ///
+    /// # Errors
+    /// Fails on a database error; nothing is ended then.
+    pub fn sweep(&self, now: u64) -> rusqlite::Result<Vec<BlobHash>> {
+        let db = self.db();
+        db.execute("DELETE FROM holdings WHERE expires_at <= ?1", params![now])?;
+        let mut stmt = db.prepare(
+            "SELECT sha256 FROM blobs WHERE sha256 NOT IN (SELECT sha256 FROM holdings)",
+        )?;
+        let unheld: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(unheld.iter().filter_map(|h| BlobHash::parse(h)).collect())
+    }
+
+    /// Forgets the blob if no holding is left on it; call once its bytes are deleted.
+    ///
+    /// # Errors
+    /// Fails on a database error.
+    pub fn forget(&self, hash: &BlobHash) -> rusqlite::Result<()> {
+        self.db().execute(
+            "DELETE FROM blobs WHERE sha256 = ?1
+             AND sha256 NOT IN (SELECT sha256 FROM holdings)",
+            params![hash.as_str()],
+        )?;
+        Ok(())
     }
 
     /// The blob, if any holding on it is still live at `now`.
@@ -197,5 +245,48 @@ mod tests {
             .unwrap();
         assert_eq!(h.live_blob(&hash, 160).unwrap().unwrap().sunset, 250);
         assert!(h.live_blob(&hash, 250).unwrap().is_none());
+    }
+
+    #[test]
+    fn sweep_ends_expired_holdings_and_returns_only_unheld_blobs() {
+        let h = Holdings::init(Connection::open_in_memory().unwrap()).unwrap();
+        let (x, y) = (BlobHash::of(b"x"), BlobHash::of(b"y"));
+        h.record(&x, 1, "text/plain", "a", &payment(), 100, 50)
+            .unwrap();
+        h.record(&x, 1, "text/plain", "b", &payment(), 200, 50)
+            .unwrap();
+        h.record(&y, 1, "text/plain", "a", &payment(), 100, 50)
+            .unwrap();
+        assert_eq!(h.sweep(160).unwrap(), vec![y.clone()]);
+        // Until forgotten, an unheld blob is listed again, so a failed delete is retried.
+        assert_eq!(h.sweep(160).unwrap(), vec![y.clone()]);
+        h.forget(&y).unwrap();
+        assert!(h.sweep(160).unwrap().is_empty());
+        assert!(h.live_blob(&x, 160).unwrap().is_some());
+        assert_eq!(h.sweep(250).unwrap(), vec![x]);
+    }
+
+    #[test]
+    fn sunset_is_the_latest_live_expiry_and_an_expired_blob_is_recorded_afresh() {
+        let h = Holdings::init(Connection::open_in_memory().unwrap()).unwrap();
+        let hash = BlobHash::of(b"x");
+        h.record(&hash, 1, "text/plain", "a", &payment(), 100, 50)
+            .unwrap();
+        h.record(&hash, 1, "text/plain", "a", &payment(), 100, 50)
+            .unwrap();
+        let b = h
+            .record(&hash, 1, "image/png", "b", &payment(), 120, 50)
+            .unwrap();
+        assert_eq!((b.expires_at, b.sunset), (170, 200));
+        assert_eq!((b.content_type.as_str(), b.uploaded), ("text/plain", 100));
+
+        let again = h
+            .record(&hash, 1, "image/png", "a", &payment(), 300, 50)
+            .unwrap();
+        assert_eq!((again.expires_at, again.sunset), (350, 350));
+        assert_eq!(
+            (again.content_type.as_str(), again.uploaded),
+            ("image/png", 300)
+        );
     }
 }

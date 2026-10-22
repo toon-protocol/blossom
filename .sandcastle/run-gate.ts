@@ -139,7 +139,8 @@ export async function runGate(sandbox: Sandbox, steps: readonly GateStep[]): Pro
   for (const step of steps) {
     console.log(`  [gate] ${step.name}: ${step.command}`);
     const lines: string[] = [];
-    // The sandbox exec runs under sh (dash), which has no `pipefail`; run the step in bash.
+    // sandbox.exec runs through sh, which in the sandbox image is dash and rejects
+    // `pipefail`; ask for bash.
     const result = await sandbox.exec(`bash -c ${shellQuote(`set -eo pipefail\n${step.command}`)}`, {
       onLine: (line) => {
         lines.push(line);

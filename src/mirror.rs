@@ -17,6 +17,7 @@ use axum::response::Response;
 use reqwest::Url;
 use serde::Deserialize;
 
+use crate::acceptance;
 use crate::auth::Authorization;
 use crate::error::{ApiError, read_body};
 use crate::hash::BlobHash;
@@ -61,7 +62,7 @@ pub(crate) async fn mirror(
             "the fetched bytes do not hash to the authorization's x tag".into(),
         ));
     }
-    crate::upload::store(
+    crate::upload::accept_and_hold(
         &state,
         bytes,
         hash,
@@ -82,6 +83,8 @@ async fn fetch(state: &AppState, mut url: Url) -> Result<(Bytes, String), ApiErr
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(FETCH_TIMEOUT)
+            // A proxy would resolve the host again itself, past the guard.
+            .no_proxy()
             .resolve_to_addrs(&host, &addrs)
             .build()
             .map_err(ApiError::internal)?;
@@ -112,14 +115,8 @@ async fn fetch(state: &AppState, mut url: Url) -> Result<(Bytes, String), ApiErr
         if response.content_length().is_some_and(|n| n > limit) {
             return Err(ApiError::TooLarge(limit));
         }
-        let content_type = response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or("application/octet-stream")
-            .to_owned();
+        let content_type =
+            acceptance::declared_type(response.headers(), header::CONTENT_TYPE.as_str());
         // Streamed, so a source that lies about (or omits) its length is cut off at the limit.
         let mut body = Vec::new();
         while let Some(chunk) = response
@@ -144,10 +141,8 @@ async fn guard(state: &AppState, url: &Url) -> Result<(String, Vec<SocketAddr>),
     let exempt = state
         .mirror_origins
         .contains(&url.origin().ascii_serialization());
-    if !exempt && url.scheme() != "https" {
-        return Err(refused("only https URLs can be mirrored"));
-    }
-    if !matches!(url.scheme(), "http" | "https") {
+    // An exempt origin may also be plain `http`.
+    if !(url.scheme() == "https" || exempt && url.scheme() == "http") {
         return Err(refused("only https URLs can be mirrored"));
     }
     let host = url
@@ -221,12 +216,10 @@ fn is_public_v6(ip: Ipv6Addr) -> bool {
     if seg[0] == 0x2002 {
         return is_public_v4(v4_from(seg[1], seg[2]));
     }
-    !(ip.is_unspecified()
-        || ip.is_loopback()
-        || ip.is_multicast()
-        || (seg[0] & 0xfe00) == 0xfc00
-        || (seg[0] & 0xffc0) == 0xfe80
-        || (seg[0] == 0x2001 && seg[1] == 0x0db8))
+    // Only global unicast (2000::/3) is public; that already leaves out loopback, unspecified,
+    // IPv4-compatible, link-local, site-local, unique-local and multicast addresses. Within it,
+    // the IETF protocol assignments (2001::/23, Teredo among them) and documentation are not.
+    (seg[0] & 0xe000) == 0x2000 && !(seg[0] == 0x2001 && (seg[1] < 0x0200 || seg[1] == 0x0db8))
 }
 
 #[cfg(test)]
@@ -261,6 +254,10 @@ mod tests {
             "2002:7f00:1::",
             "2001:db8::1",
             "ff02::1",
+            "fec0::1",
+            "::127.0.0.1",
+            "2001::1",
+            "100::1",
         ] {
             assert!(!public(ip), "{ip} must be refused");
         }

@@ -930,6 +930,15 @@ struct Source {
 
 impl Source {
     fn serve(body: Vec<u8>) -> Self {
+        Self::start(body, true)
+    }
+
+    /// A source that states no length, so only the streamed limit can stop it.
+    fn serve_unsized(body: Vec<u8>) -> Self {
+        Self::start(body, false)
+    }
+
+    fn start(body: Vec<u8>, sized: bool) -> Self {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -943,10 +952,14 @@ impl Source {
                     Some(to) => format!(
                         "HTTP/1.1 302 Found\r\nlocation: {to}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
                     ),
-                    None => format!(
+                    None if sized => format!(
                         "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                         body.len()
                     ),
+                    None => {
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\n"
+                            .to_owned()
+                    }
                 };
                 let _ = stream.write_all(head.as_bytes());
                 if !path.starts_with("/redirect") {
@@ -984,7 +997,7 @@ fn mirror_app(source: &Source, extra: &[&str]) -> Option<App> {
 }
 
 #[test]
-fn a_mirror_from_an_allowed_origin_stores_the_blob_and_returns_a_descriptor_with_sunset() {
+fn a_mirror_from_an_allowed_origin_keeps_the_blob_and_returns_a_descriptor_with_sunset() {
     let body = random_blob(3000);
     let source = Source::serve(body.clone());
     let Some(app) = mirror_app(&source, &OPEN_CAP) else {
@@ -1046,9 +1059,8 @@ fn a_mirror_the_guard_refuses_is_refused() {
 #[test]
 fn a_mirror_that_redirects_to_a_refused_address_is_refused() {
     let body = random_blob(100);
-    let hidden = Source::serve(body.clone());
     let front = Source::serve(Vec::new());
-    // Only `front` is exempt: its redirect to `hidden` (also loopback) meets the guard.
+    // Only `front` is exempt: its redirect to an `https` loopback URL meets the address check.
     let Some(app) = mirror_app(&front, &OPEN_CAP) else {
         return;
     };
@@ -1057,10 +1069,15 @@ fn a_mirror_that_redirects_to_a_refused_address_is_refused() {
         &app,
         &signer,
         &body,
-        &front.url(&format!("/redirect?to={}", hidden.url("/blob"))),
+        &front.url("/redirect?to=https://127.0.0.1:9/blob"),
     );
     assert_eq!(status(&response), 400);
-    assert!(response.text().unwrap().contains("mirror refused"));
+    assert!(
+        response
+            .text()
+            .unwrap()
+            .contains("which is not a public address")
+    );
     assert_eq!(status(&app.read(&sha256_hex(&body)).send().unwrap()), 404);
 }
 
@@ -1091,6 +1108,21 @@ fn a_mirror_follows_a_redirect_between_allowed_origins() {
 fn a_source_over_the_mirror_size_limit_is_refused() {
     let body = random_blob(5000);
     let source = Source::serve(body.clone());
+    let Some(app) = mirror_app(
+        &source,
+        &[OPEN_CAP[0], OPEN_CAP[1], "--mirror-max-bytes", "4000"],
+    ) else {
+        return;
+    };
+    let response = mirror(&app, &Signer::random(), &body, &source.url("/blob"));
+    assert_eq!(status(&response), 413);
+    assert_eq!(status(&app.read(&sha256_hex(&body)).send().unwrap()), 404);
+}
+
+#[test]
+fn a_source_that_states_no_length_is_cut_off_at_the_mirror_size_limit() {
+    let body = random_blob(5000);
+    let source = Source::serve_unsized(body.clone());
     let Some(app) = mirror_app(
         &source,
         &[OPEN_CAP[0], OPEN_CAP[1], "--mirror-max-bytes", "4000"],

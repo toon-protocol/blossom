@@ -1,4 +1,4 @@
-//! The write port: `PUT /upload`, reached only through the connector.
+//! The write port: `PUT /upload` and `PUT /mirror`, reached only through the connector.
 
 use std::sync::PoisonError;
 
@@ -57,7 +57,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
     }
 
     let content_type = acceptance::declared_type(&parts.headers, header::CONTENT_TYPE.as_str());
-    store(
+    accept_and_hold(
         &state,
         bytes,
         hash,
@@ -72,7 +72,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
 /// The part of a paid write every route shares: the acceptance check, the bytes, and the holding
 /// (new, or extended by the same rule), under the write lock. Answers with the descriptor and
 /// `Sunset`.
-pub(crate) async fn store(
+pub(crate) async fn accept_and_hold(
     state: &SharedState,
     bytes: Bytes,
     hash: BlobHash,

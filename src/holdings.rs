@@ -161,7 +161,7 @@ impl Holdings {
         let db = self.db();
         let mut stmt = db.prepare(
             "SELECT b.sha256, b.size, b.content_type, b.uploaded,
-                    (SELECT MAX(expires_at) FROM holdings WHERE sha256 = b.sha256)
+                    (SELECT MAX(expires_at) FROM holdings WHERE sha256 = b.sha256 AND expires_at > ?2)
              FROM blobs b JOIN holdings h ON h.sha256 = b.sha256
              WHERE h.owner = ?1 AND h.expires_at > ?2
              ORDER BY b.uploaded DESC, b.sha256",

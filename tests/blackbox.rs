@@ -509,17 +509,19 @@ fn with_two_owners_one_delete_leaves_the_blob_readable_with_the_remaining_sunset
     let (first, second) = (Signer::random(), Signer::random());
     let body = random_blob(300);
     let hash = sha256_hex(&body);
-    put_blob(&app, &first, &body, "text/plain");
+    let (_, first_sunset) = put_blob(&app, &first, &body, "text/plain");
     std::thread::sleep(std::time::Duration::from_secs(2));
     let (_, second_sunset) = put_blob(&app, &second, &body, "text/plain");
+    assert!(first_sunset < second_sunset);
 
     // The later holding goes; the sunset falls back to the earlier one.
     let response = delete(&app, &hash, Some(delete_authorization(&second, &hash)));
     assert!(status(&response) == 200 || status(&response) == 204);
     let read = app.read(&hash).send().unwrap();
     assert_eq!(status(&read), 200);
-    assert!(sunset_secs(&read) < second_sunset);
+    assert_eq!(sunset_secs(&read), first_sunset);
     assert_eq!(read.bytes().unwrap().as_ref(), body.as_slice());
+    assert_eq!(read_status(&app, &hash), (200, 200));
     assert_eq!(listed(&app, &first.pubkey()).len(), 1);
     assert!(listed(&app, &second.pubkey()).is_empty());
 }

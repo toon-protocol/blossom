@@ -1,14 +1,13 @@
 //! The public port: free blob reads (BUD-01), open CORS, and `403` for paid paths.
 
-use axum::Router;
+use std::sync::PoisonError;
+
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
+use axum::{Json, Router};
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders};
-
-use axum::Json;
-use std::sync::PoisonError;
 
 use crate::auth::Authorization;
 use crate::descriptor::Descriptor;
@@ -84,7 +83,11 @@ async fn delete_blob(
                 "you hold nothing on this blob, so you cannot delete it".into(),
             ));
         }
-        collect_unheld(&state, at).map_err(ApiError::internal)?;
+        // The holding is ended and reads already 404, so a failed collection is the sweep's to
+        // retry, not a failed delete.
+        if let Err(e) = collect_unheld(&state, at) {
+            eprintln!("collecting unheld blobs after a delete failed: {e}");
+        }
         Ok(())
     })
     .await

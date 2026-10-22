@@ -64,10 +64,7 @@ async fn preflight(
         .ok_or_else(|| ApiError::BadRequest("X-Content-Length is required".into()))?
         .parse()
         .map_err(|_| ApiError::BadRequest("X-Content-Length is not a number".into()))?;
-    let content_type = text("x-content-type")
-        .filter(|v| !v.is_empty())
-        .unwrap_or("application/octet-stream")
-        .to_owned();
+    let content_type = acceptance::declared_type(&headers, "x-content-type");
     let hash = text("x-sha-256")
         .map(|s| {
             BlobHash::parse(s)

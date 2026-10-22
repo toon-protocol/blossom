@@ -30,6 +30,7 @@ pub struct App {
 
 impl App {
     /// The app with a generous storage cap, so the paid path is open.
+    /// Against an already-running container, that container (whose CI cap is as generous).
     pub fn start() -> Self {
         Self::running_container().unwrap_or_else(|| Self::spawn(3600, 3600, &OPEN_CAP))
     }

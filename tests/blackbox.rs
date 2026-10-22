@@ -546,8 +546,8 @@ fn a_blob_over_the_size_limit_gets_413_from_the_preflight_and_the_upload() {
 fn the_default_size_limit_is_just_under_the_connectors_2_mib_cap() {
     let app = App::start();
     let limit = 2 * 1024 * 1024;
-    let at_limit = app.preflight(limit - 1, "text/plain", None).send().unwrap();
-    assert_eq!(status(&at_limit), 413);
+    let just_under_2_mib = app.preflight(limit - 1, "text/plain", None).send().unwrap();
+    assert_eq!(status(&just_under_2_mib), 413);
     let fits = app.preflight(1_900_000, "text/plain", None).send().unwrap();
     assert_eq!(status(&fits), 200);
 }

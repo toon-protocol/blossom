@@ -1,6 +1,8 @@
 //! The acceptance check every paid path runs, and the free preflight (`HEAD /upload`) runs too:
 //! the blob size limit, the content-type allowlist and the total storage cap.
 
+use axum::http::HeaderMap;
+
 use crate::error::ApiError;
 use crate::hash::BlobHash;
 use crate::state::AppState;
@@ -23,11 +25,19 @@ pub fn check(state: &AppState, candidate: &Candidate, now: u64) -> Result<(), Ap
     {
         return Err(ApiError::TooLarge(config.max_blob_bytes));
     }
-    if let (Some(allowed), Some(content_type)) =
-        (&config.allowed_content_types, &candidate.content_type)
+    // An empty setting (`TOON_BLOB_ALLOWED_CONTENT_TYPES=`) lists nothing, so it is no allowlist.
+    let allowed: Vec<String> = config
+        .allowed_content_types
+        .iter()
+        .flatten()
+        .map(|a| self::essence(a))
+        .filter(|a| !a.is_empty())
+        .collect();
+    if let Some(content_type) = &candidate.content_type
+        && !allowed.is_empty()
     {
         let essence = self::essence(content_type);
-        if !allowed.iter().any(|a| self::essence(a) == essence) {
+        if !allowed.contains(&essence) {
             return Err(ApiError::UnsupportedType(content_type.clone()));
         }
     }
@@ -58,4 +68,16 @@ fn essence(content_type: &str) -> String {
         .unwrap_or("")
         .trim()
         .to_ascii_lowercase()
+}
+
+/// The content type a client states in header `name`; `application/octet-stream` when it states
+/// none. The preflight and the paid upload read it the same way, so they check the same type.
+pub fn declared_type(headers: &HeaderMap, name: &str) -> String {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("application/octet-stream")
+        .to_owned()
 }

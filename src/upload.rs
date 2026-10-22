@@ -77,17 +77,13 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         ));
     }
 
-    let content_type = declared_type(&parts.headers);
+    let content_type = acceptance::declared_type(&parts.headers, header::CONTENT_TYPE.as_str());
     let size = bytes.len() as u64;
-    let checked = state.clone();
     let candidate = Candidate {
         size: Some(size),
         content_type: Some(content_type.clone()),
         hash: Some(hash.clone()),
     };
-    tokio::task::spawn_blocking(move || acceptance::check(&checked, &candidate, at))
-        .await
-        .map_err(ApiError::internal)??;
     let retention = state.config.retention_secs;
 
     let job_state = state.clone();
@@ -98,6 +94,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
             .write_lock
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        acceptance::check(&job_state, &candidate, at)?;
         job_state
             .files
             .put(&job_hash, &bytes)
@@ -165,14 +162,4 @@ fn blob_url(public_url: &str, hash: &BlobHash, content_type: &str) -> String {
         Some(ext) => format!("{public_url}/{hash}.{ext}"),
         None => format!("{public_url}/{hash}"),
     }
-}
-
-fn declared_type(headers: &HeaderMap) -> String {
-    headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .unwrap_or("application/octet-stream")
-        .to_owned()
 }

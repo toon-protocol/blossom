@@ -157,20 +157,35 @@ impl Holdings {
         Ok(ended > 0)
     }
 
-    /// The blobs the owner holds live at `now`, newest upload first.
+    /// The blobs the owner holds live at `now`, newest upload first, at most `limit` of them.
+    /// With a `cursor`, the page starts just after that blob in this order (BUD-12); a cursor
+    /// naming a blob this server no longer knows gives an empty page.
     ///
     /// # Errors
     /// Fails on a database error.
-    pub fn list(&self, owner: &str, now: u64) -> rusqlite::Result<Vec<(BlobHash, BlobInfo)>> {
+    pub fn list(
+        &self,
+        owner: &str,
+        now: u64,
+        cursor: Option<&BlobHash>,
+        limit: Option<u32>,
+    ) -> rusqlite::Result<Vec<(BlobHash, BlobInfo)>> {
         let db = self.db();
         let mut stmt = db.prepare(
             "SELECT b.sha256, b.size, b.content_type, b.uploaded,
                     (SELECT MAX(expires_at) FROM holdings WHERE sha256 = b.sha256 AND expires_at > ?2)
              FROM blobs b JOIN holdings h ON h.sha256 = b.sha256
              WHERE h.owner = ?1 AND h.expires_at > ?2
-             ORDER BY b.uploaded DESC, b.sha256",
+               AND (?3 IS NULL OR EXISTS (
+                   SELECT 1 FROM blobs c WHERE c.sha256 = ?3
+                   AND (b.uploaded < c.uploaded OR (b.uploaded = c.uploaded AND b.sha256 > c.sha256))
+               ))
+             ORDER BY b.uploaded DESC, b.sha256
+             LIMIT ?4",
         )?;
-        let rows = stmt.query_map(params![owner, now], |row| {
+        let cursor = cursor.map(BlobHash::as_str);
+        let limit = limit.map_or(-1, i64::from);
+        let rows = stmt.query_map(params![owner, now, cursor, limit], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 BlobInfo {
@@ -322,14 +337,38 @@ mod tests {
             .unwrap();
         h.record(&hash, 1, "text/plain", "b", &payment(), 100, 100)
             .unwrap();
-        assert_eq!(h.list("a", 120).unwrap().len(), 1);
+        assert_eq!(h.list("a", 120, None, None).unwrap().len(), 1);
         assert!(!h.end_holding(&hash, "c", 120).unwrap());
         assert!(h.end_holding(&hash, "a", 120).unwrap());
         assert!(!h.end_holding(&hash, "a", 120).unwrap());
-        assert!(h.list("a", 120).unwrap().is_empty());
+        assert!(h.list("a", 120, None, None).unwrap().is_empty());
         assert_eq!(h.live_blob(&hash, 120).unwrap().unwrap().sunset, 200);
-        assert_eq!(h.list("b", 120).unwrap()[0].1.sunset, 200);
-        assert!(h.list("b", 200).unwrap().is_empty());
+        assert_eq!(h.list("b", 120, None, None).unwrap()[0].1.sunset, 200);
+        assert!(h.list("b", 200, None, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_pages_by_limit_and_starts_after_the_cursor() {
+        let h = Holdings::init(Connection::open_in_memory().unwrap()).unwrap();
+        let blobs = [b"x", b"y", b"z"].map(|b| BlobHash::of(b));
+        for (at, hash) in (100..).zip(&blobs) {
+            h.record(hash, 1, "text/plain", "a", &payment(), at, 50)
+                .unwrap();
+        }
+        let page = |cursor: Option<&BlobHash>, limit| -> Vec<BlobHash> {
+            h.list("a", 120, cursor, limit)
+                .unwrap()
+                .into_iter()
+                .map(|(hash, _)| hash)
+                .collect()
+        };
+        let [x, y, z] = &blobs;
+        assert_eq!(page(None, None), [z.clone(), y.clone(), x.clone()]);
+        assert_eq!(page(None, Some(1)), [z.clone()]);
+        assert_eq!(page(Some(z), Some(1)), [y.clone()]);
+        assert_eq!(page(Some(y), None), [x.clone()]);
+        assert!(page(Some(x), None).is_empty());
+        assert!(page(Some(&BlobHash::of(b"unknown")), None).is_empty());
     }
 
     #[test]

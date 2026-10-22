@@ -2,11 +2,12 @@
 
 use std::sync::PoisonError;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
+use serde::Deserialize;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders};
 
 use crate::auth::Authorization;
@@ -88,6 +89,15 @@ async fn delete_blob(
             .end_holding(&hash, &authorization.owner, at)
             .map_err(ApiError::internal)?
         {
+            // A blob no one holds is not here to delete; one held only by others is not yours.
+            if state
+                .holdings
+                .live_blob(&hash, at)
+                .map_err(ApiError::internal)?
+                .is_none()
+            {
+                return Err(ApiError::NotFound);
+            }
             return Err(ApiError::Forbidden(
                 "you hold nothing on this blob, so you cannot delete it".into(),
             ));
@@ -104,17 +114,42 @@ async fn delete_blob(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// BUD-12 `GET /list/<pubkey>`: descriptors of the pubkey's live holdings.
+/// BUD-12 `GET /list/<pubkey>` query parameters, kept as text so a malformed one is a `400`.
+#[derive(Deserialize)]
+struct ListQuery {
+    cursor: Option<String>,
+    limit: Option<String>,
+}
+
+/// BUD-12 `GET /list/<pubkey>`: descriptors of the pubkey's live holdings, paged by `cursor` (the
+/// sha256 of the previous page's last blob) and `limit`.
 async fn list_blobs(
     State(state): State<SharedState>,
     Path(pubkey): Path<String>,
+    Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<Descriptor>>, ApiError> {
+    let cursor = query
+        .cursor
+        .map(|c| {
+            BlobHash::parse(&c)
+                .ok_or_else(|| ApiError::BadRequest("cursor is not a sha256 hash".into()))
+        })
+        .transpose()?;
+    let limit = query
+        .limit
+        .map(|l| {
+            l.parse::<u32>()
+                .map_err(|_| ApiError::BadRequest("limit is not a whole number".into()))
+        })
+        .transpose()?;
     let pubkey = pubkey.to_ascii_lowercase();
     let public_url = state.config.public_url().to_owned();
-    let blobs = tokio::task::spawn_blocking(move || state.holdings.list(&pubkey, now()))
-        .await
-        .map_err(ApiError::internal)?
-        .map_err(ApiError::internal)?;
+    let blobs = tokio::task::spawn_blocking(move || {
+        state.holdings.list(&pubkey, now(), cursor.as_ref(), limit)
+    })
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::internal)?;
     Ok(Json(
         blobs
             .into_iter()

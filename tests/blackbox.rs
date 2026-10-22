@@ -516,9 +516,9 @@ fn an_owners_delete_ends_their_holding_and_the_blob_is_404() {
     assert!(status(&response) == 200 || status(&response) == 204);
     assert_eq!(read_status(&app, &hash), (404, 404));
     assert!(listed(&app, &owner.pubkey()).is_empty());
-    // The holding is gone, so a second delete is refused.
+    // The holding is gone and with it the blob, so a second delete finds nothing.
     let again = delete(&app, &hash, Some(delete_authorization(&owner, &hash)));
-    assert_eq!(status(&again), 403);
+    assert_eq!(status(&again), 404);
 }
 
 #[test]
@@ -607,4 +607,39 @@ fn list_returns_exactly_the_pubkeys_live_blobs_and_drops_deleted_and_expired_one
     assert!(list[0]["nip94"].is_array());
     assert_eq!(listed(&app, &other.pubkey()).len(), 1);
     assert!(listed(&app, &Signer::random().pubkey()).is_empty());
+}
+
+#[test]
+fn list_pages_with_cursor_and_limit_and_refuses_malformed_ones() {
+    let app = App::start();
+    let owner = Signer::random();
+    for _ in 0..3 {
+        put_blob(&app, &owner, &random_blob(100), "text/plain");
+    }
+    let pubkey = owner.pubkey();
+    let all = listed(&app, &pubkey);
+    assert_eq!(all.len(), 3);
+
+    let first = listed(&app, &format!("{pubkey}?limit=1"));
+    assert_eq!(first, all[..1]);
+    let cursor = all[0]["sha256"].as_str().unwrap();
+    let rest = listed(&app, &format!("{pubkey}?cursor={cursor}"));
+    assert_eq!(rest, all[1..]);
+
+    for query in ["limit=abc", "limit=-1", "cursor=nothex"] {
+        let response = app.read(&format!("list/{pubkey}?{query}")).send().unwrap();
+        assert_eq!(status(&response), 400, "{query}");
+    }
+}
+
+#[test]
+fn a_delete_of_a_blob_no_one_holds_is_404() {
+    let app = App::start();
+    let hash = sha256_hex(&random_blob(100));
+    let response = delete(
+        &app,
+        &hash,
+        Some(delete_authorization(&Signer::random(), &hash)),
+    );
+    assert_eq!(status(&response), 404);
 }

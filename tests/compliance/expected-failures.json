@@ -96,26 +96,6 @@
   },
   {
     "bud": "BUD-11",
-    "case": "DELETE requires correct x tag: DELETE without auth returns 401",
-    "surface": "delete"
-  },
-  {
-    "bud": "BUD-11",
-    "case": "DELETE requires correct x tag: DELETE with wrong x tag returns 401 or 403",
-    "surface": "delete"
-  },
-  {
-    "bud": "BUD-11",
-    "case": "GET /list/<pubkey> authorization: GET /list without auth returns 401",
-    "surface": "list"
-  },
-  {
-    "bud": "BUD-11",
-    "case": "GET /list/<pubkey> authorization: GET /list with t=list auth returns 200",
-    "surface": "list"
-  },
-  {
-    "bud": "BUD-11",
     "case": "PUT /mirror authorization: PUT /mirror with t=upload auth succeeds",
     "surface": "mirror"
   },
@@ -123,56 +103,6 @@
     "bud": "BUD-11",
     "case": "PUT /media authorization: PUT /media with t=media succeeds",
     "surface": "media"
-  },
-  {
-    "bud": "BUD-11",
-    "case": "DELETE /<sha256> with correct auth: DELETE with t=delete and correct x tag returns 200/204",
-    "surface": "delete"
-  },
-  {
-    "bud": "BUD-12",
-    "case": "GET /list/<pubkey> returns array",
-    "surface": "list"
-  },
-  {
-    "bud": "BUD-12",
-    "case": "GET /list descriptor fields",
-    "surface": "list"
-  },
-  {
-    "bud": "BUD-12",
-    "case": "GET /list pagination",
-    "surface": "list"
-  },
-  {
-    "bud": "BUD-12",
-    "case": "GET /list malformed params",
-    "surface": "list"
-  },
-  {
-    "bud": "BUD-12",
-    "case": "DELETE /<sha256> success",
-    "surface": "delete"
-  },
-  {
-    "bud": "BUD-12",
-    "case": "DELETE /<sha256> not found",
-    "surface": "delete"
-  },
-  {
-    "bud": "BUD-12",
-    "case": "DELETE without auth",
-    "surface": "delete"
-  },
-  {
-    "bud": "BUD-12",
-    "case": "DELETE with wrong x tag",
-    "surface": "delete"
-  },
-  {
-    "bud": "BUD-12",
-    "case": "Multiple x tags don't delete multiple blobs",
-    "surface": "delete"
   },
   {
     "bud": "BUD-01",

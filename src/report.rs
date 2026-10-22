@@ -1,8 +1,9 @@
 //! BUD-09 abuse reports: a signed NIP-56 event, free, kept for the operator and acted on by no one.
 
-use axum::body::Bytes;
+use axum::body::{Body, to_bytes};
 use axum::extract::State;
 use axum::http::StatusCode;
+use http_body_util::LengthLimitError;
 
 use crate::auth::{Event, verify_signature};
 use crate::error::ApiError;
@@ -67,11 +68,16 @@ impl Report {
 /// `400` for a report that does not verify, `413` for one over 64 KiB.
 pub async fn put_report(
     State(state): State<SharedState>,
-    body: Bytes,
+    body: Body,
 ) -> Result<StatusCode, ApiError> {
-    if body.len() > MAX_REPORT_BYTES {
-        return Err(ApiError::TooLarge(MAX_REPORT_BYTES));
-    }
+    let body = to_bytes(body, MAX_REPORT_BYTES).await.map_err(|e| {
+        let inner = e.into_inner();
+        if inner.is::<LengthLimitError>() {
+            ApiError::TooLarge(MAX_REPORT_BYTES)
+        } else {
+            ApiError::BadRequest(format!("could not read the body: {inner}"))
+        }
+    })?;
     let report = Report::parse(&body)?;
     tokio::task::spawn_blocking(move || state.holdings.keep_report(&report, now()))
         .await
@@ -122,5 +128,16 @@ mod tests {
         assert!(Report::parse(&event(1, &[&["x", X]], false)).is_err());
         assert!(Report::parse(&event(1984, &[&["x", "abc"]], false)).is_err());
         assert!(Report::parse(&event(1984, &[], false)).is_err());
+    }
+
+    #[test]
+    fn refuses_a_signature_by_another_key() {
+        let mut report: serde_json::Value =
+            serde_json::from_slice(&event(1984, &[&["x", X]], false)).unwrap();
+        let id = hex::decode(report["id"].as_str().unwrap()).unwrap();
+        let other = SigningKey::from_bytes(&[7u8; 32]).unwrap();
+        let sig: k256::schnorr::Signature = other.sign_prehash(&id).unwrap();
+        report["sig"] = hex::encode(sig.to_bytes()).into();
+        assert!(Report::parse(report.to_string().as_bytes()).is_err());
     }
 }

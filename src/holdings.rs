@@ -1,4 +1,4 @@
-//! Blob metadata and holdings, in SQLite.
+//! Blob metadata, holdings and kept reports, in SQLite.
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -7,6 +7,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::hash::BlobHash;
 use crate::payment::Payment;
+use crate::report::Report;
 
 /// What the blob app knows about a blob that has at least one live holding.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,10 +80,10 @@ impl Holdings {
     ///
     /// # Errors
     /// Fails on a database error.
-    pub fn keep_report(&self, report: &crate::report::Report, now: u64) -> rusqlite::Result<()> {
+    pub fn keep_report(&self, report: &Report, now: u64) -> rusqlite::Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        for (hash, kind) in &report.blobs {
+        for (hash, report_type) in &report.blobs {
             tx.execute(
                 "INSERT OR IGNORE INTO reports
                      (event_id, sha256, reporter, report_type, content, received_at, event)
@@ -91,7 +92,7 @@ impl Holdings {
                     report.event_id,
                     hash.as_str(),
                     report.reporter,
-                    kind,
+                    report_type,
                     report.content,
                     now,
                     report.raw

@@ -69,12 +69,13 @@ because an event names it.
   refuse the hash. There is no admin endpoint.
 
 A report is a signed kind 1984 event with an `x` tag holding the blob's sha256 (and, as the tag's
-third element, the report type). A bad signature, the wrong kind or no hash is refused with `400`.
-An accepted report is kept in the `reports` table of `blossom.db` in the storage directory, one
-row per reported blob, with the reporter's pubkey, the type, the content, the receipt time and the
-event as sent. The operator reads them with
-`sqlite3 /data/blossom.db 'SELECT sha256, report_type, reporter, content FROM reports ORDER BY received_at'`
-and, to act, adds the hash to `TOON_BLOCKED_BLOBS`.
+third element, the report type). A bad signature, the wrong kind or no hash is refused with `400`,
+and a body over 64 KiB with `413`. An accepted report is kept in the `reports` table of
+`blossom.db` in the storage directory, one row per reported blob, with the reporter's pubkey, the
+type, the content, the receipt time and the event as sent. The image has no `sqlite3`, so the
+operator reads them with a `sqlite3` outside it, against the volume's copy of the database:
+`sqlite3 <volume dir>/blossom.db 'SELECT sha256, report_type, reporter, content FROM reports ORDER BY received_at'`
+(`docker volume inspect` gives the directory). To act, they add the hash to `TOON_BLOCKED_BLOBS`.
 
 ### Storage
 

@@ -128,5 +128,10 @@
     "bud": "BUD-08",
     "case": "Mirror returns nip94: mirror succeeds",
     "surface": "mirror"
+  },
+  {
+    "bud": "BUD-11",
+    "case": "GET /list/<pubkey> authorization: GET /list without auth returns 401",
+    "surface": "optional"
   }
 ]

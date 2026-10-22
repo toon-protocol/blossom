@@ -1,12 +1,11 @@
 //! BUD-09 abuse reports: a signed NIP-56 event, free, kept for the operator and acted on by no one.
 
-use axum::body::{Body, to_bytes};
+use axum::body::Body;
 use axum::extract::State;
 use axum::http::StatusCode;
-use http_body_util::LengthLimitError;
 
 use crate::auth::{Event, verify_signature};
-use crate::error::ApiError;
+use crate::error::{ApiError, read_body};
 use crate::hash::BlobHash;
 use crate::state::{SharedState, now};
 
@@ -70,14 +69,7 @@ pub async fn put_report(
     State(state): State<SharedState>,
     body: Body,
 ) -> Result<StatusCode, ApiError> {
-    let body = to_bytes(body, MAX_REPORT_BYTES).await.map_err(|e| {
-        let inner = e.into_inner();
-        if inner.is::<LengthLimitError>() {
-            ApiError::TooLarge(MAX_REPORT_BYTES)
-        } else {
-            ApiError::BadRequest(format!("could not read the body: {inner}"))
-        }
-    })?;
+    let body = read_body(body, MAX_REPORT_BYTES).await?;
     let report = Report::parse(&body)?;
     tokio::task::spawn_blocking(move || state.holdings.keep_report(&report, now()))
         .await

@@ -1,16 +1,14 @@
 //! The write port: `PUT /upload`, reached only through the connector.
 
-use axum::body::to_bytes;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::put;
 use axum::{Json, Router};
-use http_body_util::LengthLimitError;
 use serde::Serialize;
 
 use crate::auth::UploadAuthorization;
-use crate::error::ApiError;
+use crate::error::{ApiError, read_body};
 use crate::hash::BlobHash;
 use crate::holdings::Recorded;
 use crate::payment::Payment;
@@ -59,14 +57,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         ));
     }
 
-    let bytes = to_bytes(body, MAX_BLOB_BYTES).await.map_err(|e| {
-        let inner = e.into_inner();
-        if inner.is::<LengthLimitError>() {
-            ApiError::TooLarge(MAX_BLOB_BYTES)
-        } else {
-            ApiError::BadRequest(format!("could not read the body: {inner}"))
-        }
-    })?;
+    let bytes = read_body(body, MAX_BLOB_BYTES).await?;
     let hash = BlobHash::of(&bytes);
     if !authorization.covers(&hash) || claimed.is_some_and(|c| c != hash) {
         return Err(ApiError::BadRequest(

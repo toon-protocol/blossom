@@ -106,7 +106,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-/// A Nostr identity that signs BUD-11 authorizations.
+/// A Nostr identity that signs BUD-11 authorizations and NIP-56 reports.
 pub struct Signer(SigningKey);
 
 impl Signer {
@@ -148,18 +148,7 @@ impl Signer {
     pub fn upload_authorization(&self, body: &[u8]) -> String {
         self.authorization("upload", &sha256_hex(body), now() - 10, now() + 600)
     }
-}
 
-/// Random bytes, so a rerun against a long-lived container never collides with an old blob.
-pub fn random_blob(len: usize) -> Vec<u8> {
-    (0..len).map(|_| rand::random::<u8>()).collect()
-}
-
-pub fn status(response: &Response) -> u16 {
-    response.status().as_u16()
-}
-
-impl Signer {
     /// A signed NIP-56 report event (kind `kind`) with the given tags, as a request body.
     pub fn report(&self, kind: u64, tags: &[Vec<&str>], tamper: bool) -> String {
         let tags: Vec<Vec<String>> = tags
@@ -179,4 +168,13 @@ impl Signer {
         })
         .to_string()
     }
+}
+
+/// Random bytes, so a rerun against a long-lived container never collides with an old blob.
+pub fn random_blob(len: usize) -> Vec<u8> {
+    (0..len).map(|_| rand::random::<u8>()).collect()
+}
+
+pub fn status(response: &Response) -> u16 {
+    response.status().as_u16()
 }

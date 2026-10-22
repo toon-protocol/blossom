@@ -1,4 +1,5 @@
-//! The public port: free blob reads (BUD-01), open CORS, and `403` for paid paths.
+//! The public port: free blob reads (BUD-01), free reports (BUD-09), open CORS, and `403` for
+//! paid paths.
 
 use axum::Router;
 use axum::extract::{Path, State};

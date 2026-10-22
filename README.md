@@ -65,7 +65,10 @@ because an event names it.
 ### Limits and moderation
 
 - The connector caps a paid request at 2 MiB, so blobs go up to about 1.9 MiB.
-- An operator total storage cap, with no default, keeps uploads off until it is set.
+- An operator total storage cap (`TOON_BLOB_STORAGE_CAP_BYTES`), with no default, keeps uploads off
+  until it is set. Settings: `TOON_BLOB_MAX_BLOB_BYTES` (default about 1.9 MiB, over it is `413`) and
+  `TOON_BLOB_ALLOWED_CONTENT_TYPES` (optional, comma-separated, `415` outside it); each has a flag.
+  Cap refusals are `507`. The preflight and the paid upload run one acceptance check.
 - Reports never remove anything. A takedown is `TOON_BLOCKED_BLOBS`, a startup list of blocked
   hashes, as the relay's event blocklist is: it ends every holding, and the preflight and upload
   refuse the hash. There is no admin endpoint.

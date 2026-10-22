@@ -36,12 +36,14 @@ if [[ -n ${BLOSSOM_IMAGE:-} ]]; then
   docker rm -fv blossom-compliance >/dev/null 2>&1 || true
   docker run -d --name blossom-compliance \
     -p "127.0.0.1:$write_port:3001" -p "127.0.0.1:$public_port:3000" \
-    -e TOON_BLOB_PUBLIC_URL="http://127.0.0.1:$proxy_port" "$BLOSSOM_IMAGE" >/dev/null
+    -e TOON_BLOB_PUBLIC_URL="http://127.0.0.1:$proxy_port" \
+    -e TOON_BLOB_STORAGE_CAP_BYTES=1000000000 "$BLOSSOM_IMAGE" >/dev/null
   # Follow the container's log so the failure dump below has it.
   docker logs -f blossom-compliance >"$work/app.log" 2>&1 &
 else
   "$binary" --write-addr "127.0.0.1:$write_port" --public-addr "127.0.0.1:$public_port" \
-    --public-url "http://127.0.0.1:$proxy_port" --storage-dir "$work/data" >"$work/app.log" 2>&1 &
+    --public-url "http://127.0.0.1:$proxy_port" --storage-dir "$work/data" \
+    --storage-cap-bytes 1000000000 >"$work/app.log" 2>&1 &
 fi
 pids+=($!)
 node "$here/proxy.mjs" "$proxy_port" "http://127.0.0.1:$write_port" "http://127.0.0.1:$public_port" \

@@ -4,6 +4,7 @@
 //! and the public port, which serves blob reads for free. The app validates no payment; it records
 //! the statement the connector makes and trusts it.
 
+pub mod acceptance;
 pub mod auth;
 pub mod blob_files;
 pub mod config;

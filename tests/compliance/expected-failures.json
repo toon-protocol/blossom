@@ -60,21 +60,6 @@
     "surface": "media"
   },
   {
-    "bud": "BUD-06",
-    "case": "HEAD /upload with valid headers",
-    "surface": "preflight"
-  },
-  {
-    "bud": "BUD-06",
-    "case": "HEAD /upload validation",
-    "surface": "preflight"
-  },
-  {
-    "bud": "BUD-06",
-    "case": "HEAD /upload then PUT /upload",
-    "surface": "preflight"
-  },
-  {
     "bud": "BUD-11",
     "case": "PUT /mirror authorization: PUT /mirror with t=upload auth succeeds",
     "surface": "mirror"
@@ -87,6 +72,11 @@
   {
     "bud": "BUD-01",
     "case": "HEAD /<sha256>: HEAD response body is empty",
+    "surface": "unobservable"
+  },
+  {
+    "bud": "BUD-06",
+    "case": "HEAD /upload with valid headers: HEAD /upload returns no body",
     "surface": "unobservable"
   },
   {

@@ -2,6 +2,7 @@
 
 use std::sync::PoisonError;
 
+use crate::acceptance::{self, Candidate};
 use crate::auth::Authorization;
 use crate::descriptor::Descriptor;
 use crate::error::{ApiError, read_body};
@@ -11,13 +12,10 @@ use crate::payment::Payment;
 use crate::state::{SharedState, now};
 use crate::sunset::{SUNSET, sunset_value};
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::put;
 use axum::{Json, Router};
-
-/// The connector caps a paid request at 2 MiB; a body larger than this is refused outright.
-pub const MAX_BLOB_BYTES: usize = 2 * 1024 * 1024;
 
 pub fn router(state: SharedState) -> Router {
     Router::new()
@@ -38,7 +36,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         at,
         &state.config.domain(),
     )?;
-    let claimed = claimed_hash(&parts.headers)?;
+    let claimed = acceptance::claimed_hash(&parts.headers)?;
     if let Some(claimed) = &claimed
         && !authorization.covers(claimed)
     {
@@ -47,7 +45,8 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         ));
     }
 
-    let bytes = read_body(body, MAX_BLOB_BYTES).await?;
+    let read_limit = usize::try_from(state.config.max_blob_bytes).unwrap_or(usize::MAX);
+    let bytes = read_body(body, read_limit).await?;
     let hash = BlobHash::of(&bytes);
     if !authorization.covers(&hash) || claimed.is_some_and(|c| c != hash) {
         return Err(ApiError::BadRequest(
@@ -55,15 +54,13 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         ));
     }
 
-    let content_type = parts
-        .headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .unwrap_or("application/octet-stream")
-        .to_owned();
+    let content_type = acceptance::declared_type(&parts.headers, header::CONTENT_TYPE.as_str());
     let size = bytes.len() as u64;
+    let candidate = Candidate {
+        size,
+        content_type: content_type.clone(),
+        hash: Some(hash.clone()),
+    };
     let retention = state.config.retention_secs;
 
     let job_state = state.clone();
@@ -74,6 +71,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
             .write_lock
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        acceptance::check(&job_state, &candidate, at)?;
         job_state
             .files
             .put(&job_hash, &bytes)
@@ -114,16 +112,4 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
     }
     response.headers_mut().insert(SUNSET, sunset_value(sunset));
     Ok(response)
-}
-
-fn claimed_hash(headers: &HeaderMap) -> Result<Option<BlobHash>, ApiError> {
-    headers
-        .get("x-sha-256")
-        .map(|v| {
-            v.to_str()
-                .ok()
-                .and_then(|s| BlobHash::parse(s.trim()))
-                .ok_or_else(|| ApiError::BadRequest("X-SHA-256 is not a sha256 hash".into()))
-        })
-        .transpose()
 }

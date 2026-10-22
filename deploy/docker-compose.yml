@@ -5,7 +5,8 @@
 #
 # Only Caddy publishes ports. The write port is never published, and Caddy never proxies to it.
 # Bring it up with signer.key and settlement.key beside this file (uid 10001 must read them):
-#   DOMAIN=blobs.example.com docker compose up -d
+#   DOMAIN=blobs.example.com STORAGE_CAP_BYTES=50000000000 docker compose up -d
+# The blob app keeps uploads off until it has a total storage cap, so the bundle asks for one.
 
 name: blossom
 
@@ -33,6 +34,7 @@ services:
     image: ghcr.io/toon-protocol/blossom:release
     environment:
       TOON_BLOB_PUBLIC_URL: https://${DOMAIN:?set DOMAIN to the public host}
+      TOON_BLOB_STORAGE_CAP_BYTES: ${STORAGE_CAP_BYTES:?set STORAGE_CAP_BYTES to the total bytes of blobs to keep}
     # No `ports:`. The write port (3001) is reached by the connector over the compose network only.
     expose: ['3000', '3001']
     volumes:

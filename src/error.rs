@@ -18,8 +18,16 @@ pub enum ApiError {
     UploadsGoThroughToon,
     #[error("blob not found")]
     NotFound,
+    #[error("X-Content-Length is required")]
+    LengthRequired,
     #[error("blob is larger than the {0} byte limit")]
-    TooLarge(usize),
+    TooLarge(u64),
+    #[error("content type {0} is not allowed on this server")]
+    UnsupportedType(String),
+    #[error(
+        "the storage cap is not set or would be exceeded: this server is not accepting uploads"
+    )]
+    StorageFull,
     #[error("range not satisfiable")]
     RangeNotSatisfiable(u64),
     #[error("internal error")]
@@ -37,7 +45,10 @@ impl ApiError {
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             Self::Forbidden(_) | Self::UploadsGoThroughToon => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
+            Self::LengthRequired => StatusCode::LENGTH_REQUIRED,
             Self::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::UnsupportedType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::StorageFull => StatusCode::INSUFFICIENT_STORAGE,
             Self::RangeNotSatisfiable(_) => StatusCode::RANGE_NOT_SATISFIABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -72,7 +83,7 @@ pub async fn read_body(body: Body, limit: usize) -> Result<Bytes, ApiError> {
     to_bytes(body, limit).await.map_err(|e| {
         let inner = e.into_inner();
         if inner.is::<LengthLimitError>() {
-            ApiError::TooLarge(limit)
+            ApiError::TooLarge(u64::try_from(limit).unwrap_or(u64::MAX))
         } else {
             ApiError::BadRequest(format!("could not read the body: {inner}"))
         }

@@ -6,11 +6,12 @@ use std::sync::PoisonError;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, put};
+use axum::routing::{get, head, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders};
 
+use crate::acceptance::{self, Candidate};
 use crate::auth::Authorization;
 use crate::descriptor::Descriptor;
 use crate::error::ApiError;
@@ -28,6 +29,7 @@ pub fn router(state: SharedState) -> Router {
         router = router.route(path, put(refuse_put));
     }
     router
+        .route("/upload", head(preflight))
         .route("/report", put(crate::report::put_report))
         .route("/{name}", get(read_blob).delete(delete_blob))
         .route("/list/{pubkey}", get(list_blobs))
@@ -54,6 +56,33 @@ pub fn router(state: SharedState) -> Router {
                 .max_age(std::time::Duration::from_hours(24)),
         )
         .with_state(state)
+}
+
+/// BUD-06: runs the paid upload's acceptance check on the headers a client would send, for free.
+/// `X-SHA-256` is required, so a blob already kept gets the answer its paid upload would.
+async fn preflight(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let size = headers
+        .get("x-content-length")
+        .ok_or(ApiError::LengthRequired)?
+        .to_str()
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .ok_or_else(|| ApiError::BadRequest("X-Content-Length is not a number".into()))?;
+    let candidate = Candidate {
+        size,
+        content_type: acceptance::declared_type(&headers, "x-content-type"),
+        hash: Some(
+            acceptance::claimed_hash(&headers)?
+                .ok_or_else(|| ApiError::BadRequest("X-SHA-256 is required".into()))?,
+        ),
+    };
+    tokio::task::spawn_blocking(move || acceptance::check(&state, &candidate, now()))
+        .await
+        .map_err(ApiError::internal)??;
+    Ok(StatusCode::OK)
 }
 
 async fn refuse_put() -> ApiError {

@@ -11,7 +11,8 @@ pub struct AppState {
     pub files: BlobFiles,
     pub holdings: Holdings,
     /// Held while bytes and holdings change together, so a sweep never deletes the bytes of an
-    /// upload that is part-way recorded.
+    /// upload that is part-way recorded. A paid upload also runs its acceptance check under it, so
+    /// two uploads at once cannot both fit under the storage cap and together exceed it.
     pub write_lock: Mutex<()>,
 }
 

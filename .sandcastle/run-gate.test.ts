@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { gateFromCi } from './run-gate.ts';
+import { gateFromCi, runGate } from './run-gate.ts';
 
 const CI = `
 name: CI
@@ -99,4 +100,32 @@ test('a GitHub expression in env or working-directory skips the step too', () =>
 test('the expression note names the expression syntax literally', () => {
   const { notes } = gateFromCi('jobs:\n  gate:\n    steps:\n      - run: echo ${{ x }}\n');
   assert.match(notes.join('\n'), /a \$\{\{ \}\} expression/);
+});
+
+// A stand-in for the sandbox: `exec` hands the whole string to `sh -c`, as sandcastle's
+// does. The sandbox image's sh is dash, which rejects `set -o pipefail`, so the runner
+// must not lean on sh for it: every command reaching sh has to be a `bash -c` call.
+function shSandbox(): { exec: (command: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>; seen: string[] } {
+  const seen: string[] = [];
+  return {
+    seen,
+    exec: async (command: string) => {
+      seen.push(command);
+      const r = spawnSync('sh', ['-c', command], { encoding: 'utf8' });
+      return { exitCode: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
+    },
+  };
+}
+
+test('a gate step runs under bash, not the sandbox sh, which may be dash', async () => {
+  const sandbox = shSandbox();
+  const result = await runGate(sandbox as never, [{ name: 'step 1', command: "echo 'it''s' ok" }]);
+  assert.equal(result.passed, true);
+  assert.match(sandbox.seen[0]!, /^bash -c /);
+});
+
+test('a failing command early in a pipe fails the step', async () => {
+  const result = await runGate(shSandbox() as never, [{ name: 'step 1', command: 'false | cat' }]);
+  assert.equal(result.passed, false);
+  assert.equal(result.failure?.command, 'false | cat');
 });

@@ -2,7 +2,7 @@
 
 use axum::Router;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders};
@@ -25,8 +25,16 @@ pub fn router(state: SharedState) -> Router {
         .layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::any())
-                .allow_methods(AllowMethods::mirror_request())
-                .allow_headers(AllowHeaders::mirror_request())
+                .allow_methods(AllowMethods::list([
+                    Method::GET,
+                    Method::HEAD,
+                    Method::PUT,
+                    Method::DELETE,
+                ]))
+                .allow_headers(AllowHeaders::list([
+                    header::AUTHORIZATION,
+                    header::HeaderName::from_static("*"),
+                ]))
                 .expose_headers(ExposeHeaders::list([
                     header::CONTENT_LENGTH,
                     header::CONTENT_RANGE,

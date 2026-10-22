@@ -20,6 +20,18 @@ jobs:
       # The black-box suite starts the binary directly and talks only to its two ports.
       - run: cargo test --locked --test blackbox
 
+  # blossom-compliance against the built binary, through a test-only proxy that joins the two ports
+  # and states a payment on the paid paths. The suite always exits 0, so tests/compliance/check.mjs
+  # fails the build from its results.json. Markers for surfaces not built yet are in
+  # tests/compliance/expected-failures.json: each later ticket removes its own.
+  compliance:
+    runs-on: ubuntu-latest
+    needs: gate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: tests/compliance/run.sh
+
   image:
     runs-on: ubuntu-latest
     needs: gate

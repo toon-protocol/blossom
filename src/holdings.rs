@@ -22,6 +22,8 @@ pub struct BlobInfo {
 /// the first `uploaded` and type) and the expiry of this owner's holding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recorded {
+    /// Whether this upload stored the blob for the first time (no holding was live on its bytes).
+    pub created: bool,
     pub content_type: String,
     pub uploaded: u64,
     pub expires_at: u64,
@@ -83,10 +85,10 @@ impl Holdings {
     ) -> rusqlite::Result<Recorded> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        tx.execute(
+        let created = tx.execute(
             "INSERT OR IGNORE INTO blobs (sha256, size, content_type, uploaded) VALUES (?1, ?2, ?3, ?4)",
             params![hash.as_str(), size, content_type, now],
-        )?;
+        )? == 1;
         let (content_type, uploaded): (String, u64) = tx.query_row(
             "SELECT content_type, uploaded FROM blobs WHERE sha256 = ?1",
             params![hash.as_str()],
@@ -117,6 +119,7 @@ impl Holdings {
         )?;
         tx.commit()?;
         Ok(Recorded {
+            created,
             content_type,
             uploaded,
             expires_at,

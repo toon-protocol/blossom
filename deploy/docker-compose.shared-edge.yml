@@ -1,0 +1,25 @@
+# Overlay: run the blob app behind another bundle's connector.
+#   docker compose -f docker-compose.yml -f docker-compose.shared-edge.yml up -d
+#
+# This bundle's own connector and Caddy are switched off (a profile nothing activates). The blob
+# app is not touched: same image, same settings. It joins `edge-blossom`, which the host bundle
+# creates and its connector joins; that connector's connector.toml and Caddyfile carry the blob
+# app's routes and public host.
+
+services:
+  connector:
+    profiles: [disabled]
+
+  caddy:
+    profiles: [disabled]
+
+  blossom:
+    networks:
+      # Adding a `networks:` key replaces the implicit default network, so keep it.
+      default: {}
+      edge-blossom:
+        aliases: [blossom]
+
+networks:
+  edge-blossom:
+    external: true

@@ -1,0 +1,61 @@
+# The only public surface: the blob app's public port, plus the connector's paid edge at /ilp.
+# The write port is never proxied here.
+{$DOMAIN:localhost} {
+	@paid_edge path /ilp /ilp/*
+	handle @paid_edge {
+		reverse_proxy connector:4000
+	}
+
+	# BUD-01 reads, and BUD-12 DELETE of the owner's holding. The app accepts upper-case hex and
+	# any extension after the hash, so this does too.
+	@read {
+		method GET HEAD OPTIONS
+		path_regexp sha ^/[0-9a-fA-F]{64}(\.[^/]*)?$
+	}
+	@delete {
+		method DELETE OPTIONS
+		path_regexp sha ^/[0-9a-fA-F]{64}(\.[^/]*)?$
+	}
+	# BUD-12 list, BUD-06 preflight, BUD-09 report.
+	@list {
+		method GET HEAD OPTIONS
+		path_regexp list ^/list/[0-9a-f]{64}$
+	}
+	@preflight {
+		method HEAD OPTIONS
+		path /upload
+	}
+	@report {
+		method PUT OPTIONS
+		path /report
+	}
+	# A PUT to a paid path (and its CORS preflight), which the app refuses 403: paid writes go
+	# through /ilp.
+	@direct_put {
+		method PUT OPTIONS
+		path /upload /mirror /media
+	}
+
+	handle @read {
+		reverse_proxy blossom:3000
+	}
+	handle @delete {
+		reverse_proxy blossom:3000
+	}
+	handle @list {
+		reverse_proxy blossom:3000
+	}
+	handle @preflight {
+		reverse_proxy blossom:3000
+	}
+	handle @report {
+		reverse_proxy blossom:3000
+	}
+	handle @direct_put {
+		reverse_proxy blossom:3000
+	}
+
+	handle {
+		respond "not found" 404
+	}
+}

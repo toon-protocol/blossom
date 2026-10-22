@@ -3,7 +3,7 @@
 use std::sync::PoisonError;
 
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
@@ -31,8 +31,16 @@ pub fn router(state: SharedState) -> Router {
         .layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::any())
-                .allow_methods(AllowMethods::mirror_request())
-                .allow_headers(AllowHeaders::mirror_request())
+                .allow_methods(AllowMethods::list([
+                    Method::GET,
+                    Method::HEAD,
+                    Method::PUT,
+                    Method::DELETE,
+                ]))
+                .allow_headers(AllowHeaders::list([
+                    header::AUTHORIZATION,
+                    header::HeaderName::from_static("*"),
+                ]))
                 .expose_headers(ExposeHeaders::list([
                     header::CONTENT_LENGTH,
                     header::CONTENT_RANGE,
@@ -61,6 +69,7 @@ async fn delete_blob(
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok()),
         at,
+        &state.config.domain(),
         "delete",
     )?;
     let hash = parse_name(&name).ok_or(ApiError::NotFound)?;

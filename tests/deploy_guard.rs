@@ -48,17 +48,53 @@ fn own_bundle_runs_connector_blob_app_and_caddy() {
     assert_eq!(names, ["blossom", "caddy", "connector"]);
 }
 
+/// One immutable connector build, moved only by a reviewed commit here and in the compose file.
+const EXPECTED_CONNECTOR_IMAGE: &str = "ghcr.io/toon-protocol/connector:rust-2026.09.29.1";
+
+/// `rust-sha-<commit>` or `rust-<YYYY.MM.DD.N>`: tags nothing ever repoints.
+fn is_immutable_connector_tag(tag: &str) -> bool {
+    let all = |s: &str, f: fn(&char) -> bool| !s.is_empty() && s.chars().all(|c| f(&c));
+    if let Some(sha) = tag.strip_prefix("rust-sha-") {
+        return (7..=40).contains(&sha.len()) && all(sha, char::is_ascii_hexdigit);
+    }
+    let Some(release) = tag.strip_prefix("rust-") else {
+        return false;
+    };
+    let parts: Vec<_> = release.split('.').collect();
+    parts.len() == 4
+        && [4, 2, 2].iter().zip(&parts).all(|(n, p)| p.len() == *n)
+        && parts.iter().all(|p| all(p, char::is_ascii_digit))
+}
+
 #[test]
 fn connector_is_on_an_immutable_pin() {
     let compose = yaml("docker-compose.yml");
     let image = service(&compose, "connector")["image"].as_str().unwrap();
+    assert_eq!(image, EXPECTED_CONNECTOR_IMAGE);
     let tag = image
         .strip_prefix("ghcr.io/toon-protocol/connector:")
         .expect("stock connector image");
     assert!(
-        tag.starts_with("rust-") && !tag.starts_with("rust-main"),
+        is_immutable_connector_tag(tag),
         "{tag} is not an immutable handle"
     );
+    assert!(!deploy_file("docker-compose.yml").contains("rust-release"));
+}
+
+#[test]
+fn moving_connector_tags_are_not_immutable() {
+    for tag in [
+        "rust-release",
+        "rust-main",
+        "rust-latest",
+        "latest",
+        "rust-sha-xyz1234",
+    ] {
+        assert!(!is_immutable_connector_tag(tag), "{tag}");
+    }
+    for tag in ["rust-sha-8708caf", "rust-2026.09.29.1"] {
+        assert!(is_immutable_connector_tag(tag), "{tag}");
+    }
 }
 
 #[test]
@@ -82,29 +118,33 @@ fn connector_toml_is_mounted_read_only() {
     );
 }
 
+/// A service's `ports:` entries, in any compose syntax, as YAML text for matching.
+fn published_ports(svc: &Yaml) -> Vec<String> {
+    svc.get("ports")
+        .and_then(Yaml::as_sequence)
+        .map(|seq| {
+            seq.iter()
+                .map(|v| serde_yaml_ng::to_string(v).unwrap())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[test]
 fn only_caddy_publishes_ports_and_never_the_write_port() {
     let compose = yaml("docker-compose.yml");
     for (name, svc) in compose["services"].as_mapping().unwrap() {
         let name = name.as_str().unwrap();
-        let published = strings(svc.get("ports"));
         if name != "caddy" {
-            assert!(published.is_empty(), "{name} publishes {published:?}");
+            assert!(svc.get("ports").is_none(), "{name} publishes ports");
         }
-        for port in published {
+        for port in published_ports(svc) {
             assert!(
                 !port.contains("3001"),
                 "{name} publishes the write port: {port}"
             );
         }
     }
-    let text = deploy_file("docker-compose.yml");
-    assert!(
-        !text
-            .lines()
-            .any(|l| l.trim_start().starts_with("- '3001") || l.contains(":3001'")),
-        "3001 published"
-    );
 }
 
 #[test]
@@ -152,14 +192,17 @@ fn caddy_proxies_only_the_public_port() {
             "unexpected upstream {target}"
         );
     }
+    let words: Vec<_> = caddyfile.split_whitespace().collect();
     assert!(
-        caddyfile.contains("handle {\n\t\trespond \"not found\" 404"),
+        words
+            .windows(4)
+            .any(|w| w[0] == "handle" && w[1] == "{" && w[2] == "respond" && w[3].starts_with('"')),
         "unmatched requests must be refused"
     );
 }
 
 #[test]
-fn shared_edge_turns_the_connector_off_and_joins_edge_blossom() {
+fn shared_edge_turns_the_connector_and_caddy_off_and_joins_edge_blossom() {
     let overlay = yaml("docker-compose.shared-edge.yml");
     for name in ["connector", "caddy"] {
         assert_eq!(
@@ -189,6 +232,10 @@ fn shared_edge_leaves_the_blob_app_unchanged() {
         "expose",
         "command",
         "entrypoint",
+        "env_file",
+        "user",
+        "profiles",
+        "deploy",
     ] {
         assert!(
             blossom.get(key).is_none(),

@@ -15,7 +15,7 @@
 		method DELETE OPTIONS
 		path_regexp sha ^/[0-9a-f]{64}(\.[A-Za-z0-9]+)?$
 	}
-	# BUD-12 list, BUD-06 preflight, BUD-09 report. A PUT to a paid path is refused 403 by the app.
+	# BUD-12 list, BUD-06 preflight, BUD-09 report.
 	@list {
 		method GET HEAD OPTIONS
 		path_regexp list ^/list/[0-9a-f]{64}$
@@ -28,6 +28,7 @@
 		method PUT OPTIONS
 		path /report
 	}
+	# A PUT to a paid path, which the app refuses 403: paid writes go through /ilp.
 	@direct_put {
 		method PUT
 		path /upload /mirror /media

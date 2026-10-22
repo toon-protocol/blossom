@@ -2,22 +2,19 @@
 
 use std::sync::PoisonError;
 
-use axum::body::to_bytes;
-use axum::extract::{Request, State};
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
-use axum::routing::put;
-use axum::{Json, Router};
-use http_body_util::LengthLimitError;
-
 use crate::auth::Authorization;
 use crate::descriptor::Descriptor;
-use crate::error::ApiError;
+use crate::error::{ApiError, read_body};
 use crate::hash::BlobHash;
 use crate::holdings::Recorded;
 use crate::payment::Payment;
 use crate::state::{SharedState, now};
 use crate::sunset::{SUNSET, sunset_value};
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::put;
+use axum::{Json, Router};
 
 /// The connector caps a paid request at 2 MiB; a body larger than this is refused outright.
 pub const MAX_BLOB_BYTES: usize = 2 * 1024 * 1024;
@@ -50,14 +47,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         ));
     }
 
-    let bytes = to_bytes(body, MAX_BLOB_BYTES).await.map_err(|e| {
-        let inner = e.into_inner();
-        if inner.is::<LengthLimitError>() {
-            ApiError::TooLarge(MAX_BLOB_BYTES)
-        } else {
-            ApiError::BadRequest(format!("could not read the body: {inner}"))
-        }
-    })?;
+    let bytes = read_body(body, MAX_BLOB_BYTES).await?;
     let hash = BlobHash::of(&bytes);
     if !authorization.covers(&hash) || claimed.is_some_and(|c| c != hash) {
         return Err(ApiError::BadRequest(

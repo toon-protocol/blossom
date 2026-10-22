@@ -1,5 +1,7 @@
+use axum::body::{Body, Bytes, to_bytes};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use http_body_util::LengthLimitError;
 
 /// A refusal, rendered with BUD-01's `X-Reason` header and the same text as the body.
 #[derive(Debug, thiserror::Error)]
@@ -59,4 +61,20 @@ impl IntoResponse for ApiError {
         }
         response
     }
+}
+
+/// Reads a request body of at most `limit` bytes.
+///
+/// # Errors
+/// [`ApiError::TooLarge`] for a body over `limit`, [`ApiError::BadRequest`] for one that cannot be
+/// read.
+pub async fn read_body(body: Body, limit: usize) -> Result<Bytes, ApiError> {
+    to_bytes(body, limit).await.map_err(|e| {
+        let inner = e.into_inner();
+        if inner.is::<LengthLimitError>() {
+            ApiError::TooLarge(limit)
+        } else {
+            ApiError::BadRequest(format!("could not read the body: {inner}"))
+        }
+    })
 }

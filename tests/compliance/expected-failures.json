@@ -75,26 +75,6 @@
     "surface": "preflight"
   },
   {
-    "bud": "BUD-09",
-    "case": "PUT /report single blob",
-    "surface": "report"
-  },
-  {
-    "bud": "BUD-09",
-    "case": "PUT /report multiple x tags",
-    "surface": "report"
-  },
-  {
-    "bud": "BUD-09",
-    "case": "PUT /report with e/p tags",
-    "surface": "report"
-  },
-  {
-    "bud": "BUD-09",
-    "case": "PUT /report invalid blob hash",
-    "surface": "report"
-  },
-  {
     "bud": "BUD-11",
     "case": "PUT /mirror authorization: PUT /mirror with t=upload auth succeeds",
     "surface": "mirror"

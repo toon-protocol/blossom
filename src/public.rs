@@ -1,4 +1,5 @@
-//! The public port: free blob reads (BUD-01), open CORS, and `403` for paid paths.
+//! The public port: free blob reads (BUD-01), free reports (BUD-09), open CORS, and `403` for
+//! paid paths.
 
 use std::sync::PoisonError;
 
@@ -27,6 +28,7 @@ pub fn router(state: SharedState) -> Router {
         router = router.route(path, put(refuse_put));
     }
     router
+        .route("/report", put(crate::report::put_report))
         .route("/{name}", get(read_blob).delete(delete_blob))
         .route("/list/{pubkey}", get(list_blobs))
         .layer(

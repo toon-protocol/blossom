@@ -40,7 +40,7 @@ every redirect, so it can never reach a service on the bundle's internal network
 | `GET /list/<pubkey>` | 12 |
 | `PUT /report`: a NIP-56 report, kept for the operator | 09 |
 
-A `PUT` sent directly to the public host is refused with `403`: uploads go through TOON.
+A `PUT` to a paid path sent directly to the public host is refused with `403`: uploads go through TOON.
 Every write carries a kind 24242 authorization (BUD-11), and blob descriptors carry `nip94` tags
 (BUD-08). BUD-03 and BUD-10 are client-side. BUD-07 is not implemented
 ([ADR 0003](docs/adr/0003-bud-07-is-not-implemented.md)).
@@ -69,6 +69,16 @@ because an event names it.
 - Reports never remove anything. A takedown is `TOON_BLOCKED_BLOBS`, a startup list of blocked
   hashes, as the relay's event blocklist is: it ends every holding, and the preflight and upload
   refuse the hash. There is no admin endpoint.
+
+A report is a signed kind 1984 event with an `x` tag holding the blob's sha256 (and, as the tag's
+third element, the report type). A bad signature, the wrong kind or no hash is refused with `400`,
+and a body over 64 KiB with `413`. An accepted report is kept in the `reports` table of
+`blossom.db` in the storage directory, one row per reported blob, with the reporter's pubkey, the
+type, the content, the receipt time and the event as sent. The image has no `sqlite3`, so the
+operator reads them with a `sqlite3` outside it, against the volume's copy of the database:
+`sqlite3 <volume dir>/blossom.db 'SELECT sha256, report_type, reporter, content FROM reports ORDER BY received_at'`
+(`docker volume inspect` gives the directory; the database is in WAL mode, so a copy of it needs
+`blossom.db-wal` too). To act, they add the hash to `TOON_BLOCKED_BLOBS`.
 
 ### Storage
 

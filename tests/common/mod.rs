@@ -124,7 +124,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-/// A Nostr identity that signs BUD-11 authorizations.
+/// A Nostr identity that signs BUD-11 authorizations and NIP-56 reports.
 pub struct Signer(SigningKey);
 
 impl Signer {
@@ -165,6 +165,26 @@ impl Signer {
     /// A valid upload authorization for `body`.
     pub fn upload_authorization(&self, body: &[u8]) -> String {
         self.authorization("upload", &sha256_hex(body), now() - 10, now() + 600)
+    }
+
+    /// A signed NIP-56 report event (kind `kind`) with the given tags, as a request body.
+    pub fn report(&self, kind: u64, tags: &[Vec<&str>], tamper: bool) -> String {
+        let tags: Vec<Vec<String>> = tags
+            .iter()
+            .map(|t| t.iter().map(|s| (*s).to_owned()).collect())
+            .collect();
+        let pubkey = self.pubkey();
+        let created_at = now();
+        let id = Sha256::digest(
+            serde_json::to_string(&(0, &pubkey, created_at, kind, &tags, "illegal")).unwrap(),
+        );
+        let sig: k256::schnorr::Signature = self.0.sign_prehash(&id).unwrap();
+        let content = if tamper { "changed" } else { "illegal" };
+        serde_json::json!({
+            "id": hex::encode(id), "pubkey": pubkey, "created_at": created_at, "kind": kind,
+            "tags": tags, "content": content, "sig": hex::encode(sig.to_bytes()),
+        })
+        .to_string()
     }
 }
 

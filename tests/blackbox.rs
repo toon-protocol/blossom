@@ -383,3 +383,44 @@ fn an_upload_over_the_size_limit_is_413() {
         .unwrap();
     assert_eq!(status(&response), 413);
 }
+
+fn put_report(app: &App, body: String) -> Response {
+    app.client
+        .put(format!("{}/report", app.public_url))
+        .body(body)
+        .send()
+        .unwrap()
+}
+
+#[test]
+fn a_valid_report_is_accepted_free_and_changes_nothing() {
+    let app = App::start();
+    let body = random_blob(3000);
+    let hash = sha256_hex(&body);
+    let (_, sunset) = put_blob(&app, &Signer::random(), &body, "image/png");
+
+    let report = Signer::random().report(1984, &[vec!["x", &hash, "illegal"]], false);
+    assert_eq!(status(&put_report(&app, report)), 200);
+
+    let response = app.read(&hash).send().unwrap();
+    assert_eq!(status(&response), 200);
+    assert_eq!(sunset_secs(&response), sunset);
+    assert_eq!(response.bytes().unwrap().as_ref(), body.as_slice());
+}
+
+#[test]
+fn a_bad_report_is_refused() {
+    let app = App::start();
+    let hash = sha256_hex(b"anything");
+    let signer = Signer::random();
+    let tags = [vec!["x", hash.as_str(), "spam"]];
+    for body in [
+        signer.report(1984, &tags, true),
+        signer.report(1, &tags, false),
+        signer.report(1984, &[], false),
+        signer.report(1984, &[vec!["x", "not-a-hash"]], false),
+        "not an event".to_owned(),
+    ] {
+        assert_eq!(status(&put_report(&app, body)), 400);
+    }
+}

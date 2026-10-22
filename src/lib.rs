@@ -12,6 +12,7 @@ pub mod hash;
 pub mod holdings;
 pub mod payment;
 pub mod public;
+pub mod report;
 pub mod state;
 pub mod sunset;
 pub mod upload;

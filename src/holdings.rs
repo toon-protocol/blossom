@@ -55,6 +55,16 @@ impl Holdings {
                  amount TEXT NOT NULL,
                  chain TEXT NOT NULL,
                  PRIMARY KEY (sha256, owner)
+             );
+             CREATE TABLE IF NOT EXISTS reports (
+                 event_id TEXT NOT NULL,
+                 sha256 TEXT NOT NULL,
+                 reporter TEXT NOT NULL,
+                 report_type TEXT NOT NULL,
+                 content TEXT NOT NULL,
+                 received_at INTEGER NOT NULL,
+                 event TEXT NOT NULL,
+                 PRIMARY KEY (event_id, sha256)
              );",
         )?;
         Ok(Self { db: Mutex::new(db) })
@@ -62,6 +72,33 @@ impl Holdings {
 
     fn db(&self) -> MutexGuard<'_, Connection> {
         self.db.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Keeps a verified report about a blob for the operator. It touches no holding and no blob
+    /// row: a report is only read, never acted on. The same event reported twice is kept once.
+    ///
+    /// # Errors
+    /// Fails on a database error.
+    pub fn keep_report(&self, report: &crate::report::Report, now: u64) -> rusqlite::Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        for (hash, kind) in &report.blobs {
+            tx.execute(
+                "INSERT OR IGNORE INTO reports
+                     (event_id, sha256, reporter, report_type, content, received_at, event)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    report.event_id,
+                    hash.as_str(),
+                    report.reporter,
+                    kind,
+                    report.content,
+                    now,
+                    report.raw
+                ],
+            )?;
+        }
+        tx.commit()
     }
 
     /// Records a paid upload as the owner's holding on the blob. The holding's expiry becomes

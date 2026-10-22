@@ -21,6 +21,7 @@ pub fn router(state: SharedState) -> Router {
         router = router.route(path, put(refuse_put));
     }
     router
+        .route("/report", put(crate::report::put_report))
         .route("/{name}", get(read_blob))
         .layer(
             CorsLayer::new()

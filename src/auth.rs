@@ -13,14 +13,14 @@ use crate::hash::BlobHash;
 const AUTH_KIND: u64 = 24242;
 
 #[derive(Debug, Deserialize)]
-struct Event {
-    id: String,
-    pubkey: String,
-    created_at: u64,
-    kind: u64,
-    tags: Vec<Vec<String>>,
-    content: String,
-    sig: String,
+pub(crate) struct Event {
+    pub id: String,
+    pub pubkey: String,
+    pub created_at: u64,
+    pub kind: u64,
+    pub tags: Vec<Vec<String>>,
+    pub content: String,
+    pub sig: String,
 }
 
 /// A verified upload authorization: who signed it, and which blob hashes it covers.
@@ -92,7 +92,8 @@ impl UploadAuthorization {
     }
 }
 
-fn verify_signature(event: &Event) -> Result<(), &'static str> {
+/// Checks that the event's id is the hash of its content and that its signature verifies.
+pub(crate) fn verify_signature(event: &Event) -> Result<(), &'static str> {
     let serialized = serde_json::to_string(&(
         0,
         &event.pubkey,

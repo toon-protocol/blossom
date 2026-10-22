@@ -158,3 +158,25 @@ pub fn random_blob(len: usize) -> Vec<u8> {
 pub fn status(response: &Response) -> u16 {
     response.status().as_u16()
 }
+
+impl Signer {
+    /// A signed NIP-56 report event (kind `kind`) with the given tags, as a request body.
+    pub fn report(&self, kind: u64, tags: &[Vec<&str>], tamper: bool) -> String {
+        let tags: Vec<Vec<String>> = tags
+            .iter()
+            .map(|t| t.iter().map(|s| (*s).to_owned()).collect())
+            .collect();
+        let pubkey = self.pubkey();
+        let created_at = now();
+        let id = Sha256::digest(
+            serde_json::to_string(&(0, &pubkey, created_at, kind, &tags, "illegal")).unwrap(),
+        );
+        let sig: k256::schnorr::Signature = self.0.sign_prehash(&id).unwrap();
+        let content = if tamper { "changed" } else { "illegal" };
+        serde_json::json!({
+            "id": hex::encode(id), "pubkey": pubkey, "created_at": created_at, "kind": kind,
+            "tags": tags, "content": content, "sig": hex::encode(sig.to_bytes()),
+        })
+        .to_string()
+    }
+}

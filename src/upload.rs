@@ -1,5 +1,7 @@
 //! The write port: `PUT /upload`, reached only through the connector.
 
+use std::sync::PoisonError;
+
 use axum::body::to_bytes;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, header};
@@ -89,6 +91,10 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
     let job_hash = hash.clone();
     let job_type = content_type.clone();
     let recorded = tokio::task::spawn_blocking(move || -> Result<Recorded, ApiError> {
+        let _writing = job_state
+            .write_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         job_state
             .files
             .put(&job_hash, &bytes)

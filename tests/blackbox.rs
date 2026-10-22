@@ -383,3 +383,61 @@ fn an_upload_over_the_size_limit_is_413() {
         .unwrap();
     assert_eq!(status(&response), 413);
 }
+
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    for _ in 0..100 {
+        if done() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    panic!("timed out waiting for {what}");
+}
+
+fn read_status(app: &App, hash: &str) -> (u16, u16) {
+    let get = status(&app.read(hash).send().unwrap());
+    let head = status(
+        &app.client
+            .head(format!("{}/{hash}", app.public_url))
+            .send()
+            .unwrap(),
+    );
+    (get, head)
+}
+
+#[test]
+fn a_blob_is_404_after_its_last_holding_expires_and_stays_readable_while_another_is_live() {
+    let Some(app) = App::start_short(3, 1) else {
+        return;
+    };
+    let (early, late) = (Signer::random(), Signer::random());
+    let body = random_blob(200);
+    let hash = sha256_hex(&body);
+    put_blob(&app, &early, &body, "text/plain");
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let (_, late_sunset) = put_blob(&app, &late, &body, "text/plain");
+    // The first holding expires while the second is live.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert_eq!(read_status(&app, &hash), (200, 200));
+    let read = app.read(&hash).send().unwrap();
+    assert_eq!(sunset_secs(&read), late_sunset);
+    assert_eq!(read.bytes().unwrap().as_ref(), body.as_slice());
+    wait_until("the last holding to expire", || {
+        read_status(&app, &hash) == (404, 404)
+    });
+}
+
+#[test]
+fn an_expired_blob_can_be_uploaded_again() {
+    let Some(app) = App::start_short(2, 1) else {
+        return;
+    };
+    let signer = Signer::random();
+    let body = random_blob(100);
+    let hash = sha256_hex(&body);
+    put_blob(&app, &signer, &body, "text/plain");
+    wait_until("expiry", || read_status(&app, &hash).0 == 404);
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    put_blob(&app, &signer, &body, "text/plain");
+    assert_eq!(read_status(&app, &hash), (200, 200));
+}

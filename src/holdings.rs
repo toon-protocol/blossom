@@ -123,6 +123,30 @@ impl Holdings {
         })
     }
 
+    /// Ends the holdings that expired at or before `now` and forgets every blob left with none,
+    /// returning those blobs so their bytes can be deleted.
+    ///
+    /// # Errors
+    /// Fails on a database error; nothing is ended then.
+    pub fn sweep(&self, now: u64) -> rusqlite::Result<Vec<BlobHash>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        tx.execute("DELETE FROM holdings WHERE expires_at <= ?1", params![now])?;
+        let unheld: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT sha256 FROM blobs WHERE sha256 NOT IN (SELECT sha256 FROM holdings)",
+            )?;
+            stmt.query_map([], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        tx.execute(
+            "DELETE FROM blobs WHERE sha256 NOT IN (SELECT sha256 FROM holdings)",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(unheld.iter().filter_map(|h| BlobHash::parse(h)).collect())
+    }
+
     /// The blob, if any holding on it is still live at `now`.
     ///
     /// # Errors
@@ -194,5 +218,20 @@ mod tests {
             .unwrap();
         assert_eq!(h.live_blob(&hash, 160).unwrap().unwrap().sunset, 250);
         assert!(h.live_blob(&hash, 250).unwrap().is_none());
+    }
+
+    #[test]
+    fn sweep_ends_expired_holdings_and_returns_only_unheld_blobs() {
+        let h = Holdings::init(Connection::open_in_memory().unwrap()).unwrap();
+        let (x, y) = (BlobHash::of(b"x"), BlobHash::of(b"y"));
+        h.record(&x, 1, "text/plain", "a", &payment(), 100, 50)
+            .unwrap();
+        h.record(&x, 1, "text/plain", "b", &payment(), 200, 50)
+            .unwrap();
+        h.record(&y, 1, "text/plain", "a", &payment(), 100, 50)
+            .unwrap();
+        assert_eq!(h.sweep(160).unwrap(), vec![y]);
+        assert!(h.live_blob(&x, 160).unwrap().is_some());
+        assert_eq!(h.sweep(250).unwrap(), vec![x]);
     }
 }

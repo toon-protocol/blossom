@@ -28,6 +28,11 @@ pub struct Config {
     /// The retention period one paid upload adds to its holding, in seconds (default 30 days).
     #[arg(long, env = "TOON_BLOB_RETENTION_SECS", default_value_t = THIRTY_DAYS_SECS)]
     pub retention_secs: u64,
+
+    /// How often the sweep ends expired holdings and deletes unheld blobs, in seconds (default 1 hour).
+    #[arg(long, env = "TOON_BLOB_SWEEP_INTERVAL_SECS", default_value_t = 3600,
+          value_parser = clap::value_parser!(u64).range(1..))]
+    pub sweep_interval_secs: u64,
 }
 
 impl Config {

@@ -23,15 +23,15 @@ struct Event {
     sig: String,
 }
 
-/// A verified upload authorization: who signed it, and which blob hashes it covers.
+/// A verified authorization: who signed it, and which blob hashes it covers.
 #[derive(Debug)]
-pub struct UploadAuthorization {
+pub struct Authorization {
     /// The signer's pubkey (64 hex characters). This is the blob's owner.
     pub owner: String,
     hashes: Vec<BlobHash>,
 }
 
-impl UploadAuthorization {
+impl Authorization {
     #[must_use]
     pub fn covers(&self, hash: &BlobHash) -> bool {
         self.hashes.contains(hash)
@@ -42,11 +42,25 @@ impl UploadAuthorization {
     /// tags must name it in one of them.
     ///
     /// # Errors
+    /// As [`Authorization::verify_for`] with the verb `upload`.
+    pub fn verify(header: Option<&str>, now: u64, domain: &str) -> Result<Self, ApiError> {
+        Self::verify_for(header, now, domain, "upload")
+    }
+
+    /// Verifies the `Authorization` header value for the action `verb` at time `now`, on the
+    /// server whose lowercase domain name is `domain`.
+    ///
+    /// # Errors
     /// [`ApiError::Unauthorized`] when the header is absent or malformed, the signature or id is
     /// wrong, the kind is not 24242, `created_at` is in the future, `expiration` is missing or
-    /// past, `t` is not `upload`, there is no `x` tag holding a sha256 hash, or `server` tags are
+    /// past, `t` is not `verb`, there is no `x` tag holding a sha256 hash, or `server` tags are
     /// present and none names `domain`.
-    pub fn verify(header: Option<&str>, now: u64, domain: &str) -> Result<Self, ApiError> {
+    pub fn verify_for(
+        header: Option<&str>,
+        now: u64,
+        domain: &str,
+        verb: &str,
+    ) -> Result<Self, ApiError> {
         let denied = |why: &str| ApiError::Unauthorized(format!("invalid authorization: {why}"));
         let header =
             header.ok_or_else(|| ApiError::Unauthorized("authorization required".into()))?;
@@ -78,8 +92,8 @@ impl UploadAuthorization {
         if expiration <= now {
             return Err(denied("expired"));
         }
-        if !tag("t").any(|t| t.get(1).map(String::as_str) == Some("upload")) {
-            return Err(denied("not authorized for upload"));
+        if !tag("t").any(|t| t.get(1).map(String::as_str) == Some(verb)) {
+            return Err(denied(&format!("not authorized for {verb}")));
         }
         let mut servers = tag("server").filter_map(|t| t.get(1)).peekable();
         if servers.peek().is_some() && !servers.any(|s| s.eq_ignore_ascii_case(domain)) {
@@ -162,8 +176,21 @@ mod tests {
     #[test]
     fn accepts_a_valid_authorization() {
         let h = header(AUTH_KIND, &good_tags(), NOW - 1, false);
-        let auth = UploadAuthorization::verify(Some(&h), NOW, "blobs.test").unwrap();
+        let auth = Authorization::verify(Some(&h), NOW, "blobs.test").unwrap();
         assert_eq!(auth.owner.len(), 64);
+    }
+
+    #[test]
+    fn a_verb_authorization_is_only_good_for_that_verb() {
+        let h = header(
+            AUTH_KIND,
+            &[["t", "delete"], ["x", X], ["expiration", "2000000"]],
+            NOW - 1,
+            false,
+        );
+        assert!(Authorization::verify_for(Some(&h), NOW, "blobs.test", "delete").is_ok());
+        assert!(Authorization::verify_for(Some(&h), NOW, "blobs.test", "upload").is_err());
+        assert!(Authorization::verify(Some(&h), NOW, "blobs.test").is_err());
     }
 
     #[test]
@@ -172,7 +199,7 @@ mod tests {
             let mut tags = good_tags().to_vec();
             tags.extend(servers.iter().map(|s| ["server", *s]));
             let h = header(AUTH_KIND, &tags, NOW - 1, false);
-            UploadAuthorization::verify(Some(&h), NOW, "blobs.test").is_ok()
+            Authorization::verify(Some(&h), NOW, "blobs.test").is_ok()
         };
         assert!(with(&[]), "no server tag means any server");
         assert!(with(&["other.test", "Blobs.Test"]));
@@ -181,8 +208,8 @@ mod tests {
 
     #[test]
     fn refuses_each_defect() {
-        let v = |h: &str| UploadAuthorization::verify(Some(h), NOW, "blobs.test").is_err();
-        assert!(UploadAuthorization::verify(None, NOW, "blobs.test").is_err());
+        let v = |h: &str| Authorization::verify(Some(h), NOW, "blobs.test").is_err();
+        assert!(Authorization::verify(None, NOW, "blobs.test").is_err());
         assert!(v("Bearer x"));
         assert!(v(&header(AUTH_KIND, &good_tags(), NOW - 1, true)));
         assert!(v(&header(1, &good_tags(), NOW - 1, false)));

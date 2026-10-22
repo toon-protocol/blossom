@@ -19,6 +19,8 @@ jobs:
       - run: cargo test --locked --lib --bins
       # The black-box suite starts the binary directly and talks only to its two ports.
       - run: cargo test --locked --test blackbox
+      # The bundle files: compose, connector.toml and the Caddyfile.
+      - run: cargo test --locked --test deploy_guard
 
   # blossom-compliance against the built binary, through a test-only proxy that joins the two ports
   # and states a payment on the paid paths. The suite always exits 0, so tests/compliance/check.mjs

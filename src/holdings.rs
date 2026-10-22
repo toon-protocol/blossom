@@ -362,12 +362,12 @@ mod tests {
                 .map(|(hash, _)| hash)
                 .collect()
         };
-        let [x, y, z] = &blobs;
-        assert_eq!(page(None, None), [z.clone(), y.clone(), x.clone()]);
-        assert_eq!(page(None, Some(1)), [z.clone()]);
-        assert_eq!(page(Some(z), Some(1)), [y.clone()]);
-        assert_eq!(page(Some(y), None), [x.clone()]);
-        assert!(page(Some(x), None).is_empty());
+        let newest_first: Vec<BlobHash> = blobs.iter().rev().cloned().collect();
+        assert_eq!(page(None, None), newest_first);
+        assert_eq!(page(None, Some(1)), newest_first[..1]);
+        assert_eq!(page(Some(&newest_first[0]), Some(1)), newest_first[1..2]);
+        assert_eq!(page(Some(&newest_first[1]), None), newest_first[2..]);
+        assert!(page(Some(&newest_first[2]), None).is_empty());
         assert!(page(Some(&BlobHash::of(b"unknown")), None).is_empty());
     }
 

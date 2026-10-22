@@ -35,7 +35,7 @@ fn put_blob(
         .header("content-type", content_type)
         .send()
         .unwrap();
-    assert_eq!(status(&response), 200);
+    assert!(matches!(status(&response), 200 | 201));
     let sunset = sunset_secs(&response);
     (response.json().unwrap(), sunset)
 }
@@ -317,7 +317,7 @@ fn an_upload_whose_body_does_not_hash_to_x_or_x_sha_256_is_refused() {
         .header("x-sha-256", sha256_hex(&body))
         .send()
         .unwrap();
-    assert_eq!(status(&response), 200, "a matching X-SHA-256 is accepted");
+    assert_eq!(status(&response), 201, "a matching X-SHA-256 is accepted");
 
     assert_eq!(status(&app.read(&sha256_hex(&other)).send().unwrap()), 404);
 }
@@ -394,6 +394,26 @@ fn an_upload_over_the_size_limit_is_413() {
         .send()
         .unwrap();
     assert_eq!(status(&response), 413);
+}
+
+#[test]
+fn a_new_blob_is_201_created_and_the_same_bytes_again_are_200() {
+    let app = App::start();
+    let signer = Signer::random();
+    let body = random_blob(512);
+    let send = |signer: &Signer| {
+        app.upload(&body)
+            .header("authorization", signer.upload_authorization(&body))
+            .send()
+            .unwrap()
+    };
+    assert_eq!(status(&send(&signer)), 201);
+    assert_eq!(status(&send(&signer)), 200);
+    assert_eq!(
+        status(&send(&Signer::random())),
+        200,
+        "another owner, same bytes"
+    );
 }
 
 fn wait_until(what: &str, mut done: impl FnMut() -> bool) {

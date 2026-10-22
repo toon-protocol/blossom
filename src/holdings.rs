@@ -23,6 +23,9 @@ pub struct BlobInfo {
 /// holding, and the blob's sunset.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recorded {
+    /// Whether this call recorded the blob afresh: no `blobs` row existed for it, or none of its
+    /// holdings was live.
+    pub created: bool,
     pub content_type: String,
     pub uploaded: u64,
     pub expires_at: u64,
@@ -87,7 +90,7 @@ impl Holdings {
     ) -> rusqlite::Result<Recorded> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        tx.execute(
+        let created = tx.execute(
             "INSERT INTO blobs (sha256, size, content_type, uploaded) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (sha256) DO UPDATE SET
                  size = excluded.size, content_type = excluded.content_type,
@@ -96,7 +99,7 @@ impl Holdings {
                  SELECT 1 FROM holdings WHERE sha256 = excluded.sha256 AND expires_at > ?4
              )",
             params![hash.as_str(), size, content_type, now],
-        )?;
+        )? == 1;
         let (content_type, uploaded): (String, u64) = tx.query_row(
             "SELECT content_type, uploaded FROM blobs WHERE sha256 = ?1",
             params![hash.as_str()],
@@ -132,6 +135,7 @@ impl Holdings {
         )?;
         tx.commit()?;
         Ok(Recorded {
+            created,
             content_type,
             uploaded,
             expires_at,

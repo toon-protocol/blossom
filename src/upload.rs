@@ -4,7 +4,7 @@ use std::sync::PoisonError;
 
 use axum::body::to_bytes;
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::put;
 use axum::{Json, Router};
@@ -51,6 +51,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok()),
         at,
+        &state.config.domain(),
     )?;
     let claimed = claimed_hash(&parts.headers)?;
     if let Some(claimed) = &claimed
@@ -116,6 +117,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
     .map_err(ApiError::internal)??;
 
     let Recorded {
+        created,
         content_type,
         uploaded,
         sunset,
@@ -136,6 +138,9 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         uploaded,
     };
     let mut response = Json(descriptor).into_response();
+    if created {
+        *response.status_mut() = StatusCode::CREATED;
+    }
     response.headers_mut().insert(SUNSET, sunset_value(sunset));
     Ok(response)
 }

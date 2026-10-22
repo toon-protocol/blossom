@@ -38,12 +38,15 @@ impl UploadAuthorization {
     }
 
     /// Verifies the `Authorization` header value for an upload at time `now` (unix seconds).
+    /// `domain` is this server's lowercase domain name: an authorization that carries `server`
+    /// tags must name it in one of them.
     ///
     /// # Errors
     /// [`ApiError::Unauthorized`] when the header is absent or malformed, the signature or id is
     /// wrong, the kind is not 24242, `created_at` is in the future, `expiration` is missing or
-    /// past, `t` is not `upload`, or there is no `x` tag holding a sha256 hash.
-    pub fn verify(header: Option<&str>, now: u64) -> Result<Self, ApiError> {
+    /// past, `t` is not `upload`, there is no `x` tag holding a sha256 hash, or `server` tags are
+    /// present and none names `domain`.
+    pub fn verify(header: Option<&str>, now: u64, domain: &str) -> Result<Self, ApiError> {
         let denied = |why: &str| ApiError::Unauthorized(format!("invalid authorization: {why}"));
         let header =
             header.ok_or_else(|| ApiError::Unauthorized("authorization required".into()))?;
@@ -77,6 +80,10 @@ impl UploadAuthorization {
         }
         if !tag("t").any(|t| t.get(1).map(String::as_str) == Some("upload")) {
             return Err(denied("not authorized for upload"));
+        }
+        let mut servers = tag("server").filter_map(|t| t.get(1)).peekable();
+        if servers.peek().is_some() && !servers.any(|s| s.eq_ignore_ascii_case(domain)) {
+            return Err(denied("not scoped to this server"));
         }
         let hashes: Vec<BlobHash> = tag("x")
             .filter_map(|t| BlobHash::parse(t.get(1)?))
@@ -155,14 +162,27 @@ mod tests {
     #[test]
     fn accepts_a_valid_authorization() {
         let h = header(AUTH_KIND, &good_tags(), NOW - 1, false);
-        let auth = UploadAuthorization::verify(Some(&h), NOW).unwrap();
+        let auth = UploadAuthorization::verify(Some(&h), NOW, "blobs.test").unwrap();
         assert_eq!(auth.owner.len(), 64);
     }
 
     #[test]
+    fn server_tags_must_name_this_server() {
+        let with = |servers: &[&'static str]| {
+            let mut tags = good_tags().to_vec();
+            tags.extend(servers.iter().map(|s| ["server", *s]));
+            let h = header(AUTH_KIND, &tags, NOW - 1, false);
+            UploadAuthorization::verify(Some(&h), NOW, "blobs.test").is_ok()
+        };
+        assert!(with(&[]), "no server tag means any server");
+        assert!(with(&["other.test", "Blobs.Test"]));
+        assert!(!with(&["other.test"]));
+    }
+
+    #[test]
     fn refuses_each_defect() {
-        let v = |h: &str| UploadAuthorization::verify(Some(h), NOW).is_err();
-        assert!(UploadAuthorization::verify(None, NOW).is_err());
+        let v = |h: &str| UploadAuthorization::verify(Some(h), NOW, "blobs.test").is_err();
+        assert!(UploadAuthorization::verify(None, NOW, "blobs.test").is_err());
         assert!(v("Bearer x"));
         assert!(v(&header(AUTH_KIND, &good_tags(), NOW - 1, true)));
         assert!(v(&header(1, &good_tags(), NOW - 1, false)));

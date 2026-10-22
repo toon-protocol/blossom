@@ -262,6 +262,18 @@ impl Holdings {
         Ok(unheld.iter().filter_map(|h| BlobHash::parse(h)).collect())
     }
 
+    /// Ends every owner's holding on the blob, live or not; returns how many were ended. The bytes
+    /// are removed by the collection the caller runs next.
+    ///
+    /// # Errors
+    /// Fails on a database error.
+    pub fn end_all_holdings(&self, hash: &BlobHash) -> rusqlite::Result<usize> {
+        self.db().execute(
+            "DELETE FROM holdings WHERE sha256 = ?1",
+            params![hash.as_str()],
+        )
+    }
+
     /// Forgets the blob if no holding is left on it; call once its bytes are deleted.
     ///
     /// # Errors
@@ -396,6 +408,24 @@ mod tests {
         assert_eq!(h.live_blob(&hash, 120).unwrap().unwrap().sunset, 200);
         assert_eq!(h.list("b", 120, None, None).unwrap()[0].1.sunset, 200);
         assert!(h.list("b", 200, None, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn ending_all_holdings_ends_every_owners_and_leaves_other_blobs() {
+        let h = Holdings::init(Connection::open_in_memory().unwrap()).unwrap();
+        let (x, y) = (BlobHash::of(b"x"), BlobHash::of(b"y"));
+        for owner in ["a", "b"] {
+            h.record(&x, 1, "text/plain", owner, &payment(), 100, 50)
+                .unwrap();
+        }
+        h.record(&y, 1, "text/plain", "a", &payment(), 100, 50)
+            .unwrap();
+        assert_eq!(h.end_all_holdings(&x).unwrap(), 2);
+        assert!(h.live_blob(&x, 120).unwrap().is_none());
+        assert_eq!(h.list("a", 120, None, None).unwrap().len(), 1);
+        assert!(h.list("b", 120, None, None).unwrap().is_empty());
+        assert_eq!(h.sweep(120).unwrap(), vec![x]);
+        assert!(h.live_blob(&y, 120).unwrap().is_some());
     }
 
     #[test]

@@ -28,6 +28,8 @@ pub enum ApiError {
         "the storage cap is not set or would be exceeded: this server is not accepting uploads"
     )]
     StorageFull,
+    #[error("this blob is not accepted on this server")]
+    Blocked,
     #[error("range not satisfiable")]
     RangeNotSatisfiable(u64),
     #[error("internal error")]
@@ -43,7 +45,9 @@ impl ApiError {
         match self {
             Self::PaymentStatement | Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-            Self::Forbidden(_) | Self::UploadsGoThroughToon => StatusCode::FORBIDDEN,
+            Self::Forbidden(_) | Self::UploadsGoThroughToon | Self::Blocked => {
+                StatusCode::FORBIDDEN
+            }
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::LengthRequired => StatusCode::LENGTH_REQUIRED,
             Self::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,

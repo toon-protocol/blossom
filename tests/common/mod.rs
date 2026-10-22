@@ -25,7 +25,7 @@ pub struct App {
     pub public_url: String,
     pub client: Client,
     child: Option<Child>,
-    _storage: Option<tempfile::TempDir>,
+    storage: Option<tempfile::TempDir>,
 }
 
 impl App {
@@ -85,12 +85,36 @@ impl App {
             public_url,
             client: Client::new(),
             child: None,
-            _storage: None,
+            storage: None,
         })
     }
 
+    /// Stops this app and starts another on the same storage with `settings`. `None` against an
+    /// already-running container.
+    pub fn restart_with(mut self, settings: &[&str]) -> Option<Self> {
+        let storage = self.storage.take()?;
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Some(Self::spawn_in(storage, 3600, 3600, settings))
+    }
+
     fn spawn(retention_secs: u32, sweep_secs: u32, settings: &[&str]) -> Self {
-        let storage = tempfile::tempdir().unwrap();
+        Self::spawn_in(
+            tempfile::tempdir().unwrap(),
+            retention_secs,
+            sweep_secs,
+            settings,
+        )
+    }
+
+    fn spawn_in(
+        storage: tempfile::TempDir,
+        retention_secs: u32,
+        sweep_secs: u32,
+        settings: &[&str],
+    ) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_blossom"))
             .args([
                 "--write-addr",
@@ -119,7 +143,7 @@ impl App {
             public_url,
             client: Client::new(),
             child: Some(child),
-            _storage: Some(storage),
+            storage: Some(storage),
         }
     }
 

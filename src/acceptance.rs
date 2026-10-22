@@ -1,5 +1,5 @@
 //! The acceptance check every paid path runs, and the free preflight (`HEAD /upload`) runs too:
-//! the blob size limit, the content-type allowlist and the total storage cap.
+//! the takedown list, the blob size limit, the content-type allowlist and the total storage cap.
 
 use axum::http::HeaderMap;
 
@@ -16,9 +16,16 @@ pub struct Candidate {
 }
 
 /// # Errors
-/// [`ApiError::TooLarge`] over the size limit, [`ApiError::UnsupportedType`] outside the
+/// [`ApiError::Blocked`] for a hash the operator took down, [`ApiError::TooLarge`] over the size limit, [`ApiError::UnsupportedType`] outside the
 /// allowlist, [`ApiError::StorageFull`] when the cap is unset or the blob's bytes would not fit.
 pub fn check(state: &AppState, candidate: &Candidate, now: u64) -> Result<(), ApiError> {
+    if candidate
+        .hash
+        .as_ref()
+        .is_some_and(|h| state.blocked.contains(h))
+    {
+        return Err(ApiError::Blocked);
+    }
     let config = &state.config;
     if candidate.size > config.max_blob_bytes {
         return Err(ApiError::TooLarge(config.max_blob_bytes));

@@ -69,8 +69,8 @@ because an event names it.
   until it is set. Settings: `TOON_BLOB_MAX_BLOB_BYTES` (default about 1.9 MiB, over it is `413`) and
   `TOON_BLOB_ALLOWED_CONTENT_TYPES` (optional, comma-separated, `415` outside it); each has a flag.
   Cap refusals are `507`. The preflight and the paid upload run one acceptance check.
-- Reports never remove anything. A takedown is `TOON_BLOCKED_BLOBS`, a startup list of blocked
-  hashes, as the relay's event blocklist is: it ends every holding, and the preflight and upload
+- Reports never remove anything. A takedown is `TOON_BLOCKED_BLOBS`, a list of blocked
+  hashes read at startup (a malformed entry fails startup), as the relay's event blocklist is: it ends every holding, and the preflight and upload
   refuse the hash. There is no admin endpoint.
 
 A report is a signed kind 1984 event with an `x` tag holding the blob's sha256 (and, as the tag's

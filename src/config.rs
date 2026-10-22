@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+use crate::hash::BlobHash;
+
 const THIRTY_DAYS_SECS: u64 = 30 * 24 * 60 * 60;
 const ONE_HOUR_SECS: u64 = 60 * 60;
 
@@ -51,12 +53,38 @@ pub struct Config {
     /// When unset, any type is accepted.
     #[arg(long, env = "TOON_BLOB_ALLOWED_CONTENT_TYPES", value_delimiter = ',')]
     pub allowed_content_types: Option<Vec<String>>,
+
+    /// Comma-separated sha256 hashes to take down: read at startup, an entry that is not a hash
+    /// fails startup. Every holding on a listed blob ends and its bytes go; the hash is refused
+    /// from then on.
+    #[arg(long, env = "TOON_BLOCKED_BLOBS", value_delimiter = ',')]
+    pub blocked_blobs: Option<Vec<String>>,
 }
 
 impl Config {
     #[must_use]
     pub fn public_url(&self) -> &str {
         self.public_url.trim_end_matches('/')
+    }
+
+    /// The blocked hashes, without repeats. An empty setting (`TOON_BLOCKED_BLOBS=`) lists nothing.
+    ///
+    /// # Errors
+    /// Names the first entry that is not a sha256 hash.
+    pub fn blocked(&self) -> Result<Vec<BlobHash>, String> {
+        let mut blocked: Vec<BlobHash> = Vec::new();
+        for entry in self.blocked_blobs.iter().flatten() {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                continue;
+            }
+            let hash = BlobHash::parse(entry)
+                .ok_or_else(|| format!("TOON_BLOCKED_BLOBS: {entry:?} is not a sha256 hash"))?;
+            if !blocked.contains(&hash) {
+                blocked.push(hash);
+            }
+        }
+        Ok(blocked)
     }
 
     /// This server's lowercase domain name, from the public URL: no scheme, port or path.
@@ -87,5 +115,20 @@ mod tests {
         assert_eq!(domain("https://Blobs.Example.com/"), "blobs.example.com");
         assert_eq!(domain("http://127.0.0.1:8080"), "127.0.0.1");
         assert_eq!(domain("blobs.test"), "blobs.test");
+    }
+
+    #[test]
+    fn blocked_blobs_are_hashes_and_a_malformed_entry_is_an_error() {
+        let hash = BlobHash::of(b"x");
+        let blocked = |list: &str| {
+            Config::parse_from(["blossom", "--public-url", "u", "--blocked-blobs", list]).blocked()
+        };
+        assert_eq!(blocked(""), Ok(vec![]));
+        let upper = hash.as_str().to_uppercase();
+        assert_eq!(
+            blocked(&format!("{hash}, {upper},")),
+            Ok(vec![hash.clone()])
+        );
+        assert!(blocked(&format!("{hash},nothex")).is_err());
     }
 }

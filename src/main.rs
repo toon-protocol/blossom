@@ -1,6 +1,6 @@
 use blossom::config::Config;
 use blossom::state::AppState;
-use blossom::{public, sweep, upload};
+use blossom::{public, sweep, takedown, upload};
 use clap::Parser;
 use tokio::net::TcpListener;
 
@@ -13,6 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("public port listening on {}", public_listener.local_addr()?);
 
     let state = AppState::open(config)?;
+    takedown::apply(&state)?;
     let sweeper = sweep::run(
         state.clone(),
         std::time::Duration::from_secs(state.config.sweep_interval_secs),

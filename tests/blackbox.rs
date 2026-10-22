@@ -826,3 +826,96 @@ fn a_delete_of_a_blob_no_one_holds_is_404() {
     );
     assert_eq!(status(&response), 404);
 }
+
+const OPEN_CAP: [&str; 2] = ["--storage-cap-bytes", "1000000000"];
+
+#[test]
+fn a_listed_blob_is_404_and_gone_from_every_owners_list_after_a_restart() {
+    let Some(app) = App::start_with(&OPEN_CAP) else {
+        return;
+    };
+    let (a, b) = (Signer::random(), Signer::random());
+    let (taken, kept) = (random_blob(100), random_blob(110));
+    put_blob(&app, &a, &taken, "text/plain");
+    put_blob(&app, &b, &taken, "text/plain");
+    put_blob(&app, &a, &kept, "text/plain");
+    let hash = sha256_hex(&taken);
+    assert_eq!(read_status(&app, &hash).0, 200);
+
+    let blocked = format!("{},{}", sha256_hex(b"unseen"), hash.to_uppercase());
+    let app = app
+        .restart_with(&[
+            "--storage-cap-bytes",
+            "1000000000",
+            "--blocked-blobs",
+            &blocked,
+        ])
+        .unwrap();
+    assert_eq!(read_status(&app, &hash).0, 404);
+    for owner in [&a, &b] {
+        assert!(
+            listed(&app, &owner.pubkey())
+                .iter()
+                .all(|blob| blob["sha256"] != hash.as_str())
+        );
+    }
+    assert_eq!(listed(&app, &a.pubkey()).len(), 1);
+    assert_eq!(read_status(&app, &sha256_hex(&kept)).0, 200);
+}
+
+#[test]
+fn the_preflight_and_the_paid_upload_refuse_a_listed_hash() {
+    let blob = random_blob(100);
+    let hash = sha256_hex(&blob);
+    let Some(app) = App::start_with(&[
+        "--storage-cap-bytes",
+        "1000000000",
+        "--blocked-blobs",
+        &hash,
+    ]) else {
+        return;
+    };
+    let preflight = app
+        .preflight(blob.len(), "text/plain", Some(&hash))
+        .send()
+        .unwrap();
+    assert_eq!(status(&preflight), 403);
+    let other = app
+        .preflight(blob.len(), "text/plain", Some(&sha256_hex(b"other")))
+        .send()
+        .unwrap();
+    assert_eq!(status(&other), 200);
+
+    let signer = Signer::random();
+    let upload = app
+        .upload(&blob)
+        .header("authorization", signer.upload_authorization(&blob))
+        .send()
+        .unwrap();
+    assert_eq!(status(&upload), 403);
+    assert_eq!(read_status(&app, &hash).0, 404);
+    assert!(listed(&app, &signer.pubkey()).is_empty());
+}
+
+#[test]
+fn a_malformed_blocked_blobs_entry_stops_the_app_starting() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_blossom"))
+        .args([
+            "--public-url",
+            "http://blobs.test",
+            "--blocked-blobs",
+            "not-a-hash",
+        ])
+        .args([
+            "--write-addr",
+            "127.0.0.1:0",
+            "--public-addr",
+            "127.0.0.1:0",
+        ])
+        .args(["--storage-dir"])
+        .arg(tempfile::tempdir().unwrap().path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("TOON_BLOCKED_BLOBS"));
+}

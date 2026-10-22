@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use clap::Parser;
 
@@ -32,11 +31,6 @@ pub struct Config {
 }
 
 impl Config {
-    #[must_use]
-    pub fn retention(&self) -> Duration {
-        Duration::from_secs(self.retention_secs)
-    }
-
     #[must_use]
     pub fn public_url(&self) -> &str {
         self.public_url.trim_end_matches('/')

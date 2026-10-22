@@ -2,20 +2,20 @@
 
 use axum::body::to_bytes;
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, header};
+use axum::http::{HeaderMap, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::put;
 use axum::{Json, Router};
+use http_body_util::LengthLimitError;
 use serde::Serialize;
 
 use crate::auth::UploadAuthorization;
 use crate::error::ApiError;
 use crate::hash::BlobHash;
+use crate::holdings::Recorded;
 use crate::payment::Payment;
 use crate::state::{SharedState, now};
-
-/// The `Sunset` header (RFC 8594): when the blob's retention ends.
-pub const SUNSET: HeaderName = HeaderName::from_static("sunset");
+use crate::sunset::{SUNSET, sunset_value};
 
 /// The connector caps a paid request at 2 MiB; a body larger than this is refused outright.
 pub const MAX_BLOB_BYTES: usize = 2 * 1024 * 1024;
@@ -59,9 +59,14 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         ));
     }
 
-    let bytes = to_bytes(body, MAX_BLOB_BYTES)
-        .await
-        .map_err(|_| ApiError::TooLarge(MAX_BLOB_BYTES))?;
+    let bytes = to_bytes(body, MAX_BLOB_BYTES).await.map_err(|e| {
+        let inner = e.into_inner();
+        if inner.is::<LengthLimitError>() {
+            ApiError::TooLarge(MAX_BLOB_BYTES)
+        } else {
+            ApiError::BadRequest(format!("could not read the body: {inner}"))
+        }
+    })?;
     let hash = BlobHash::of(&bytes);
     if !authorization.covers(&hash) || claimed.is_some_and(|c| c != hash) {
         return Err(ApiError::BadRequest(
@@ -83,9 +88,9 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
     let job_state = state.clone();
     let job_hash = hash.clone();
     let job_type = content_type.clone();
-    let expires_at = tokio::task::spawn_blocking(move || -> Result<u64, ApiError> {
+    let recorded = tokio::task::spawn_blocking(move || -> Result<Recorded, ApiError> {
         job_state
-            .store
+            .files
             .put(&job_hash, &bytes)
             .map_err(ApiError::internal)?;
         job_state
@@ -104,6 +109,11 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
     .await
     .map_err(ApiError::internal)??;
 
+    let Recorded {
+        content_type,
+        uploaded,
+        expires_at,
+    } = recorded;
     let url = blob_url(state.config.public_url(), &hash, &content_type);
     let descriptor = Descriptor {
         nip94: vec![
@@ -116,7 +126,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         sha256: hash.to_string(),
         size,
         content_type,
-        uploaded: at,
+        uploaded,
     };
     let mut response = Json(descriptor).into_response();
     response
@@ -143,11 +153,4 @@ fn blob_url(public_url: &str, hash: &BlobHash, content_type: &str) -> String {
         Some(ext) => format!("{public_url}/{hash}.{ext}"),
         None => format!("{public_url}/{hash}"),
     }
-}
-
-/// An HTTP-date `Sunset` header value for a unix-seconds expiry.
-pub(crate) fn sunset_value(expires_at: u64) -> HeaderValue {
-    let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(expires_at);
-    HeaderValue::from_str(&httpdate::fmt_http_date(when))
-        .unwrap_or_else(|_| HeaderValue::from_static(""))
 }

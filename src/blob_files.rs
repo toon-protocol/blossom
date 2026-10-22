@@ -15,22 +15,22 @@ pub enum StorageError {
 }
 
 #[derive(Clone, Debug)]
-pub struct BlobStore {
+pub struct BlobFiles {
     blobs: PathBuf,
     tmp: PathBuf,
 }
 
-impl BlobStore {
+impl BlobFiles {
     /// # Errors
     /// Fails if the directories cannot be created.
     pub fn open(root: &std::path::Path) -> io::Result<Self> {
-        let store = Self {
+        let files = Self {
             blobs: root.join("blobs"),
             tmp: root.join("tmp"),
         };
-        fs::create_dir_all(&store.blobs)?;
-        fs::create_dir_all(&store.tmp)?;
-        Ok(store)
+        fs::create_dir_all(&files.blobs)?;
+        fs::create_dir_all(&files.tmp)?;
+        Ok(files)
     }
 
     #[must_use]

@@ -157,6 +157,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "hex",
+ "http-body-util",
  "httpdate",
  "k256",
  "mime_guess",

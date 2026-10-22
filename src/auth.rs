@@ -28,13 +28,13 @@ struct Event {
 pub struct UploadAuthorization {
     /// The signer's pubkey (64 hex characters). This is the blob's owner.
     pub owner: String,
-    hashes: Vec<String>,
+    hashes: Vec<BlobHash>,
 }
 
 impl UploadAuthorization {
     #[must_use]
     pub fn covers(&self, hash: &BlobHash) -> bool {
-        self.hashes.iter().any(|x| x == hash.as_str())
+        self.hashes.contains(hash)
     }
 
     /// Verifies the `Authorization` header value for an upload at time `now` (unix seconds).
@@ -42,7 +42,7 @@ impl UploadAuthorization {
     /// # Errors
     /// [`ApiError::Unauthorized`] when the header is absent or malformed, the signature or id is
     /// wrong, the kind is not 24242, `created_at` is in the future, `expiration` is missing or
-    /// past, `t` is not `upload`, or there is no `x` tag.
+    /// past, `t` is not `upload`, or there is no `x` tag holding a sha256 hash.
     pub fn verify(header: Option<&str>, now: u64) -> Result<Self, ApiError> {
         let denied = |why: &str| ApiError::Unauthorized(format!("invalid authorization: {why}"));
         let header =
@@ -78,12 +78,11 @@ impl UploadAuthorization {
         if !tag("t").any(|t| t.get(1).map(String::as_str) == Some("upload")) {
             return Err(denied("not authorized for upload"));
         }
-        let hashes: Vec<String> = tag("x")
-            .filter_map(|t| t.get(1))
-            .map(|x| x.to_ascii_lowercase())
+        let hashes: Vec<BlobHash> = tag("x")
+            .filter_map(|t| BlobHash::parse(t.get(1)?))
             .collect();
         if hashes.is_empty() {
-            return Err(denied("no x tag"));
+            return Err(denied("no x tag with a sha256 hash"));
         }
         verify_signature(&event).map_err(denied)?;
         Ok(Self {
@@ -147,8 +146,10 @@ mod tests {
         format!("Nostr {}", STANDARD.encode(event.to_string()))
     }
 
+    const X: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+
     fn good_tags() -> [[&'static str; 2]; 3] {
-        [["t", "upload"], ["x", "ab"], ["expiration", "2000000"]]
+        [["t", "upload"], ["x", X], ["expiration", "2000000"]]
     }
 
     #[test]
@@ -168,19 +169,19 @@ mod tests {
         assert!(v(&header(AUTH_KIND, &good_tags(), NOW + 5, false)));
         assert!(v(&header(
             AUTH_KIND,
-            &[["t", "delete"], ["x", "ab"], ["expiration", "2000000"]],
+            &[["t", "delete"], ["x", X], ["expiration", "2000000"]],
             NOW - 1,
             false
         )));
         assert!(v(&header(
             AUTH_KIND,
-            &[["t", "upload"], ["x", "ab"], ["expiration", "999"]],
+            &[["t", "upload"], ["x", X], ["expiration", "999"]],
             NOW - 1,
             false
         )));
         assert!(v(&header(
             AUTH_KIND,
-            &[["t", "upload"], ["x", "ab"]],
+            &[["t", "upload"], ["x", X]],
             NOW - 1,
             false
         )));

@@ -78,10 +78,12 @@ fn uploaded_bytes_are_served_unchanged_by_hash_and_by_hash_with_extension() {
     let hash = sha256_hex(&body);
     let (_, sunset) = put_blob(&app, &Signer::random(), &body, "image/png");
 
-    for path in [hash.clone(), format!("{hash}.png")] {
+    // The extension never changes the type served: `.html` must not turn a blob into a page.
+    for path in [hash.clone(), format!("{hash}.png"), format!("{hash}.html")] {
         let response = app.read(&path).send().unwrap();
         assert_eq!(status(&response), 200, "{path}");
         assert_eq!(header(&response, "content-type"), "image/png");
+        assert_eq!(header(&response, "x-content-type-options"), "nosniff");
         assert_eq!(header(&response, "content-length"), "5000");
         assert_eq!(sunset_secs(&response), sunset);
         assert_eq!(response.bytes().unwrap().as_ref(), body.as_slice());
@@ -120,6 +122,11 @@ fn range_requests_return_the_requested_bytes() {
     let response = get("bytes=-5");
     assert_eq!(status(&response), 206);
     assert_eq!(response.bytes().unwrap().as_ref(), &body[995..]);
+
+    // An invalid range is ignored: the whole blob comes back.
+    let response = get("bytes=20-10");
+    assert_eq!(status(&response), 200);
+    assert_eq!(response.bytes().unwrap().as_ref(), body.as_slice());
 
     let response = get("bytes=5000-6000");
     assert_eq!(status(&response), 416);
@@ -341,9 +348,12 @@ fn uploading_again_extends_the_same_owners_holding() {
     let app = App::start();
     let signer = Signer::random();
     let body = random_blob(300);
-    let (_, first) = put_blob(&app, &signer, &body, "text/plain");
-    let (_, second) = put_blob(&app, &signer, &body, "text/plain");
+    let (first_descriptor, first) = put_blob(&app, &signer, &body, "text/plain");
+    let (second_descriptor, second) = put_blob(&app, &signer, &body, "application/octet-stream");
     assert!(second > first, "{second} should be after {first}");
+    // The descriptor describes the blob as first recorded, not the second request.
+    assert_eq!(second_descriptor["uploaded"], first_descriptor["uploaded"]);
+    assert_eq!(second_descriptor["type"], "text/plain");
     let read = app.read(&sha256_hex(&body)).send().unwrap();
     assert_eq!(sunset_secs(&read), second);
 }
@@ -357,4 +367,19 @@ fn two_owners_uploading_the_same_bytes_keep_one_blob() {
     let read = app.read(&sha256_hex(&body)).send().unwrap();
     assert_eq!(status(&read), 200);
     assert_eq!(read.bytes().unwrap().as_ref(), body.as_slice());
+}
+
+#[test]
+fn an_upload_over_the_size_limit_is_413() {
+    let app = App::start();
+    let body = random_blob(2 * 1024 * 1024 + 1);
+    let response = app
+        .upload(&body)
+        .header(
+            "authorization",
+            Signer::random().upload_authorization(&body),
+        )
+        .send()
+        .unwrap();
+    assert_eq!(status(&response), 413);
 }

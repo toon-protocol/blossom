@@ -1,7 +1,7 @@
 //! Blob metadata and holdings, in SQLite.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -16,6 +16,15 @@ pub struct BlobInfo {
     pub uploaded: u64,
     /// The latest expiry across the blob's live holdings: when its bytes may go.
     pub sunset: u64,
+}
+
+/// What a paid upload recorded: the blob as first recorded (a later upload of the same bytes keeps
+/// the first `uploaded` and type) and the expiry of this owner's holding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Recorded {
+    pub content_type: String,
+    pub uploaded: u64,
+    pub expires_at: u64,
 }
 
 pub struct Holdings {
@@ -51,7 +60,11 @@ impl Holdings {
         Ok(Self { db: Mutex::new(db) })
     }
 
-    /// Records a paid upload as the owner's holding on the blob and returns that holding's expiry:
+    fn db(&self) -> MutexGuard<'_, Connection> {
+        self.db.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Records a paid upload as the owner's holding on the blob. The holding's expiry becomes
     /// `max(now, current expiry) + retention`. The payer, amount and chain are kept in their own
     /// columns, apart from the owner.
     ///
@@ -67,15 +80,17 @@ impl Holdings {
         payment: &Payment,
         now: u64,
         retention: u64,
-    ) -> rusqlite::Result<u64> {
-        let mut db = self
-            .db
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    ) -> rusqlite::Result<Recorded> {
+        let mut db = self.db();
         let tx = db.transaction()?;
         tx.execute(
             "INSERT OR IGNORE INTO blobs (sha256, size, content_type, uploaded) VALUES (?1, ?2, ?3, ?4)",
             params![hash.as_str(), size, content_type, now],
+        )?;
+        let (content_type, uploaded): (String, u64) = tx.query_row(
+            "SELECT content_type, uploaded FROM blobs WHERE sha256 = ?1",
+            params![hash.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         let current: Option<u64> = tx
             .query_row(
@@ -101,7 +116,11 @@ impl Holdings {
             ],
         )?;
         tx.commit()?;
-        Ok(expires_at)
+        Ok(Recorded {
+            content_type,
+            uploaded,
+            expires_at,
+        })
     }
 
     /// The blob, if any holding on it is still live at `now`.
@@ -109,26 +128,23 @@ impl Holdings {
     /// # Errors
     /// Fails on a database error.
     pub fn live_blob(&self, hash: &BlobHash, now: u64) -> rusqlite::Result<Option<BlobInfo>> {
-        let db = self
-            .db
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        db.query_row(
-            "SELECT b.size, b.content_type, b.uploaded, MAX(h.expires_at)
+        self.db()
+            .query_row(
+                "SELECT b.size, b.content_type, b.uploaded, MAX(h.expires_at)
              FROM blobs b JOIN holdings h ON h.sha256 = b.sha256
              WHERE b.sha256 = ?1 AND h.expires_at > ?2
              GROUP BY b.sha256",
-            params![hash.as_str(), now],
-            |row| {
-                Ok(BlobInfo {
-                    size: row.get(0)?,
-                    content_type: row.get(1)?,
-                    uploaded: row.get(2)?,
-                    sunset: row.get(3)?,
-                })
-            },
-        )
-        .optional()
+                params![hash.as_str(), now],
+                |row| {
+                    Ok(BlobInfo {
+                        size: row.get(0)?,
+                        content_type: row.get(1)?,
+                        uploaded: row.get(2)?,
+                        sunset: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
     }
 }
 
@@ -150,17 +166,20 @@ mod tests {
         let hash = BlobHash::of(b"x");
         assert_eq!(
             h.record(&hash, 1, "text/plain", "o", &payment(), 100, 50)
-                .unwrap(),
+                .unwrap()
+                .expires_at,
             150
         );
         assert_eq!(
             h.record(&hash, 1, "text/plain", "o", &payment(), 120, 50)
-                .unwrap(),
+                .unwrap()
+                .expires_at,
             200
         );
         assert_eq!(
             h.record(&hash, 1, "text/plain", "o", &payment(), 500, 50)
-                .unwrap(),
+                .unwrap()
+                .expires_at,
             550
         );
     }

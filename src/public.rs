@@ -10,7 +10,7 @@ use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, Expos
 use crate::error::ApiError;
 use crate::hash::BlobHash;
 use crate::state::{SharedState, now};
-use crate::upload::{SUNSET, sunset_value};
+use crate::sunset::{SUNSET, sunset_value};
 
 /// The paid paths: a `PUT` to any of them on the public port is refused.
 const PAID_PATHS: [&str; 3] = ["/upload", "/mirror", "/media"];
@@ -43,13 +43,10 @@ async fn refuse_put() -> ApiError {
     ApiError::UploadsGoThroughToon
 }
 
-/// Splits `<sha256>[.<ext>]`.
-fn parse_name(name: &str) -> Option<(BlobHash, Option<&str>)> {
-    let (stem, ext) = match name.split_once('.') {
-        Some((stem, ext)) => (stem, Some(ext)),
-        None => (name, None),
-    };
-    Some((BlobHash::parse(stem)?, ext.filter(|e| !e.is_empty())))
+/// Parses `<sha256>[.<ext>]`. The extension is only a hint for clients: the blob is always served
+/// with the type it was uploaded with, never one picked by whoever wrote the URL.
+fn parse_name(name: &str) -> Option<BlobHash> {
+    BlobHash::parse(name.split_once('.').map_or(name, |(stem, _)| stem))
 }
 
 async fn read_blob(
@@ -57,7 +54,7 @@ async fn read_blob(
     Path(name): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let (hash, ext) = parse_name(&name).ok_or(ApiError::NotFound)?;
+    let hash = parse_name(&name).ok_or(ApiError::NotFound)?;
     let lookup_state = state.clone();
     let lookup_hash = hash.clone();
     let info =
@@ -66,16 +63,13 @@ async fn read_blob(
             .map_err(ApiError::internal)?
             .map_err(ApiError::internal)?
             .ok_or(ApiError::NotFound)?;
-    let bytes = tokio::fs::read(state.store.path(&hash))
+    let bytes = tokio::fs::read(state.files.path(&hash))
         .await
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => ApiError::NotFound,
             _ => ApiError::internal(e),
         })?;
 
-    let content_type = ext
-        .and_then(|e| mime_guess::from_ext(e).first_raw())
-        .unwrap_or(&info.content_type);
     let total = bytes.len() as u64;
     let (status, body, content_range) = match requested_range(&headers, total) {
         RangeRequest::Whole => (StatusCode::OK, bytes, None),
@@ -96,7 +90,11 @@ async fn read_blob(
     let h = response.headers_mut();
     h.insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_str(content_type).map_err(ApiError::internal)?,
+        HeaderValue::from_str(&info.content_type).map_err(ApiError::internal)?,
+    );
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
     );
     h.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     h.insert(SUNSET, sunset_value(info.sunset));
@@ -117,8 +115,8 @@ enum RangeRequest {
     Unsatisfiable,
 }
 
-/// A single `bytes=` range. Anything else (no header, another unit, several ranges) serves the
-/// whole blob, which RFC 9110 permits.
+/// A single `bytes=` range. Anything else (no header, another unit, several ranges, an invalid
+/// range such as `5-2`) serves the whole blob, as RFC 9110 permits.
 fn requested_range(headers: &HeaderMap, total: u64) -> RangeRequest {
     let Some(spec) = headers
         .get(header::RANGE)
@@ -134,6 +132,7 @@ fn requested_range(headers: &HeaderMap, total: u64) -> RangeRequest {
         return RangeRequest::Whole;
     };
     let (start, end) = match (first.parse::<u64>(), last.parse::<u64>()) {
+        (Ok(start), Ok(end)) if start > end => return RangeRequest::Whole,
         (Ok(start), Ok(end)) => (start, end.min(total.saturating_sub(1))),
         (Ok(start), Err(_)) if last.is_empty() => (start, total.saturating_sub(1)),
         (Err(_), Ok(n)) if first.is_empty() && n > 0 => {
@@ -142,7 +141,7 @@ fn requested_range(headers: &HeaderMap, total: u64) -> RangeRequest {
         (Err(_), Ok(_)) if first.is_empty() => return RangeRequest::Unsatisfiable,
         _ => return RangeRequest::Whole,
     };
-    if total == 0 || start >= total || start > end {
+    if total == 0 || start >= total {
         RangeRequest::Unsatisfiable
     } else {
         RangeRequest::Partial(start, end)
@@ -166,7 +165,7 @@ mod tests {
         assert_eq!(range("bytes=-3", 10), RangeRequest::Partial(7, 9));
         assert_eq!(range("bytes=8-99", 10), RangeRequest::Partial(8, 9));
         assert_eq!(range("bytes=10-12", 10), RangeRequest::Unsatisfiable);
-        assert_eq!(range("bytes=5-2", 10), RangeRequest::Unsatisfiable);
+        assert_eq!(range("bytes=5-2", 10), RangeRequest::Whole);
         assert_eq!(range("bytes=0-1,4-5", 10), RangeRequest::Whole);
         assert_eq!(range("items=0-1", 10), RangeRequest::Whole);
     }
@@ -174,11 +173,8 @@ mod tests {
     #[test]
     fn splits_names() {
         let hash = BlobHash::of(b"x");
-        assert_eq!(parse_name(hash.as_str()), Some((hash.clone(), None)));
-        assert_eq!(
-            parse_name(&format!("{hash}.png")),
-            Some((hash, Some("png")))
-        );
+        assert_eq!(parse_name(hash.as_str()), Some(hash.clone()));
+        assert_eq!(parse_name(&format!("{hash}.png")), Some(hash));
         assert_eq!(parse_name("nope"), None);
     }
 }

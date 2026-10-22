@@ -5,6 +5,7 @@
 //! the statement the connector makes and trusts it.
 
 pub mod auth;
+pub mod blob_files;
 pub mod config;
 pub mod error;
 pub mod hash;
@@ -12,5 +13,5 @@ pub mod holdings;
 pub mod payment;
 pub mod public;
 pub mod state;
-pub mod storage;
+pub mod sunset;
 pub mod upload;

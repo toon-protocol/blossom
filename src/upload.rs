@@ -1,19 +1,20 @@
 //! The write port: `PUT /upload`, reached only through the connector.
 
-use axum::extract::{Request, State};
-use axum::http::{HeaderMap, header};
-use axum::response::{IntoResponse, Response};
-use axum::routing::put;
-use axum::{Json, Router};
-use serde::Serialize;
+use std::sync::PoisonError;
 
-use crate::auth::UploadAuthorization;
+use crate::auth::Authorization;
+use crate::descriptor::Descriptor;
 use crate::error::{ApiError, read_body};
 use crate::hash::BlobHash;
 use crate::holdings::Recorded;
 use crate::payment::Payment;
 use crate::state::{SharedState, now};
 use crate::sunset::{SUNSET, sunset_value};
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::put;
+use axum::{Json, Router};
 
 /// The connector caps a paid request at 2 MiB; a body larger than this is refused outright.
 pub const MAX_BLOB_BYTES: usize = 2 * 1024 * 1024;
@@ -24,29 +25,18 @@ pub fn router(state: SharedState) -> Router {
         .with_state(state)
 }
 
-/// A BUD-02 blob descriptor with BUD-08 `nip94` tags.
-#[derive(Debug, Serialize)]
-struct Descriptor {
-    url: String,
-    sha256: String,
-    size: u64,
-    #[serde(rename = "type")]
-    content_type: String,
-    uploaded: u64,
-    nip94: Vec<Vec<String>>,
-}
-
 async fn upload(State(state): State<SharedState>, request: Request) -> Result<Response, ApiError> {
     let (parts, body) = request.into_parts();
     let at = now();
 
     let payment = Payment::from_headers(&parts.headers)?;
-    let authorization = UploadAuthorization::verify(
+    let authorization = Authorization::verify(
         parts
             .headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok()),
         at,
+        &state.config.domain(),
     )?;
     let claimed = claimed_hash(&parts.headers)?;
     if let Some(claimed) = &claimed
@@ -80,6 +70,10 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
     let job_hash = hash.clone();
     let job_type = content_type.clone();
     let recorded = tokio::task::spawn_blocking(move || -> Result<Recorded, ApiError> {
+        let _writing = job_state
+            .write_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         job_state
             .files
             .put(&job_hash, &bytes)
@@ -92,7 +86,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
                 &job_type,
                 &authorization.owner,
                 &payment,
-                at,
+                now(),
                 retention,
             )
             .map_err(ApiError::internal)
@@ -101,28 +95,24 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
     .map_err(ApiError::internal)??;
 
     let Recorded {
+        created,
         content_type,
         uploaded,
-        expires_at,
+        sunset,
+        ..
     } = recorded;
-    let url = blob_url(state.config.public_url(), &hash, &content_type);
-    let descriptor = Descriptor {
-        nip94: vec![
-            vec!["url".into(), url.clone()],
-            vec!["m".into(), content_type.clone()],
-            vec!["x".into(), hash.to_string()],
-            vec!["size".into(), size.to_string()],
-        ],
-        url,
-        sha256: hash.to_string(),
+    let descriptor = Descriptor::new(
+        state.config.public_url(),
+        &hash,
         size,
         content_type,
         uploaded,
-    };
+    );
     let mut response = Json(descriptor).into_response();
-    response
-        .headers_mut()
-        .insert(SUNSET, sunset_value(expires_at));
+    if created {
+        *response.status_mut() = StatusCode::CREATED;
+    }
+    response.headers_mut().insert(SUNSET, sunset_value(sunset));
     Ok(response)
 }
 
@@ -136,12 +126,4 @@ fn claimed_hash(headers: &HeaderMap) -> Result<Option<BlobHash>, ApiError> {
                 .ok_or_else(|| ApiError::BadRequest("X-SHA-256 is not a sha256 hash".into()))
         })
         .transpose()
-}
-
-fn blob_url(public_url: &str, hash: &BlobHash, content_type: &str) -> String {
-    let essence = content_type.split(';').next().unwrap_or("").trim();
-    match mime_guess::get_mime_extensions_str(essence).and_then(|e| e.first()) {
-        Some(ext) => format!("{public_url}/{hash}.{ext}"),
-        None => format!("{public_url}/{hash}"),
-    }
 }

@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod blob_files;
 pub mod config;
+pub mod descriptor;
 pub mod error;
 pub mod hash;
 pub mod holdings;
@@ -15,4 +16,5 @@ pub mod public;
 pub mod report;
 pub mod state;
 pub mod sunset;
+pub mod sweep;
 pub mod upload;

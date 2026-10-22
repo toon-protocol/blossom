@@ -27,19 +27,36 @@ pub struct App {
 
 impl App {
     pub fn start() -> Self {
-        let client = Client::builder().build().unwrap();
-        if let (Ok(write_url), Ok(public_url)) = (
+        Self::running_container().unwrap_or_else(|| Self::spawn(3600, 3600))
+    }
+
+    /// An app with a retention period and sweep interval of a few seconds, for the expiry tests.
+    /// `None` against an already-running container, whose settings the suite cannot choose.
+    pub fn start_short(retention_secs: u32, sweep_secs: u32) -> Option<Self> {
+        if Self::running_container().is_some() {
+            eprintln!("skipped: the expiry tests need an app the suite starts itself");
+            return None;
+        }
+        Some(Self::spawn(retention_secs, sweep_secs))
+    }
+
+    fn running_container() -> Option<Self> {
+        let (Ok(write_url), Ok(public_url)) = (
             std::env::var("BLOSSOM_TEST_WRITE_URL"),
             std::env::var("BLOSSOM_TEST_PUBLIC_URL"),
-        ) {
-            return Self {
-                write_url,
-                public_url,
-                client,
-                child: None,
-                _storage: None,
-            };
-        }
+        ) else {
+            return None;
+        };
+        Some(Self {
+            write_url,
+            public_url,
+            client: Client::new(),
+            child: None,
+            _storage: None,
+        })
+    }
+
+    fn spawn(retention_secs: u32, sweep_secs: u32) -> Self {
         let storage = tempfile::tempdir().unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_blossom"))
             .args([
@@ -49,7 +66,8 @@ impl App {
                 "127.0.0.1:0",
             ])
             .args(["--public-url", "http://blobs.test"])
-            .args(["--retention-secs", "3600"])
+            .args(["--retention-secs", &retention_secs.to_string()])
+            .args(["--sweep-interval-secs", &sweep_secs.to_string()])
             .arg("--storage-dir")
             .arg(storage.path())
             .stdout(Stdio::piped())
@@ -65,7 +83,7 @@ impl App {
         Self {
             write_url,
             public_url,
-            client,
+            client: Client::new(),
             child: Some(child),
             _storage: Some(storage),
         }

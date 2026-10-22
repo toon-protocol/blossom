@@ -12,6 +12,8 @@ pub enum ApiError {
     BadRequest(String),
     #[error("{0}")]
     Unauthorized(String),
+    #[error("{0}")]
+    Forbidden(String),
     #[error("uploads go through TOON: send a paid request to the upload route on the connector")]
     UploadsGoThroughToon,
     #[error("blob not found")]
@@ -33,7 +35,7 @@ impl ApiError {
         match self {
             Self::PaymentStatement | Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-            Self::UploadsGoThroughToon => StatusCode::FORBIDDEN,
+            Self::Forbidden(_) | Self::UploadsGoThroughToon => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::RangeNotSatisfiable(_) => StatusCode::RANGE_NOT_SATISFIABLE,

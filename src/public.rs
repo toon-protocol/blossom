@@ -1,17 +1,23 @@
 //! The public port: free blob reads (BUD-01), free reports (BUD-09), open CORS, and `403` for
 //! paid paths.
 
-use axum::Router;
-use axum::extract::{Path, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use std::sync::PoisonError;
+
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
+use axum::{Json, Router};
+use serde::Deserialize;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders};
 
+use crate::auth::Authorization;
+use crate::descriptor::Descriptor;
 use crate::error::ApiError;
 use crate::hash::BlobHash;
 use crate::state::{SharedState, now};
 use crate::sunset::{SUNSET, sunset_value};
+use crate::sweep::collect_unheld;
 
 /// The paid paths: a `PUT` to any of them on the public port is refused.
 const PAID_PATHS: [&str; 3] = ["/upload", "/mirror", "/media"];
@@ -23,12 +29,21 @@ pub fn router(state: SharedState) -> Router {
     }
     router
         .route("/report", put(crate::report::put_report))
-        .route("/{name}", get(read_blob))
+        .route("/{name}", get(read_blob).delete(delete_blob))
+        .route("/list/{pubkey}", get(list_blobs))
         .layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::any())
-                .allow_methods(AllowMethods::mirror_request())
-                .allow_headers(AllowHeaders::mirror_request())
+                .allow_methods(AllowMethods::list([
+                    Method::GET,
+                    Method::HEAD,
+                    Method::PUT,
+                    Method::DELETE,
+                ]))
+                .allow_headers(AllowHeaders::list([
+                    header::AUTHORIZATION,
+                    header::HeaderName::from_static("*"),
+                ]))
                 .expose_headers(ExposeHeaders::list([
                     header::CONTENT_LENGTH,
                     header::CONTENT_RANGE,
@@ -43,6 +58,114 @@ pub fn router(state: SharedState) -> Router {
 
 async fn refuse_put() -> ApiError {
     ApiError::UploadsGoThroughToon
+}
+
+/// BUD-02 `DELETE /<sha256>`: ends only the signer's holding. When it was the last, the bytes go.
+async fn delete_blob(
+    State(state): State<SharedState>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let at = now();
+    let authorization = Authorization::verify_for(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok()),
+        at,
+        &state.config.domain(),
+        "delete",
+    )?;
+    let hash = parse_name(&name).ok_or(ApiError::NotFound)?;
+    if !authorization.covers(&hash) {
+        return Err(ApiError::Unauthorized(
+            "invalid authorization: no x tag for this blob".into(),
+        ));
+    }
+    tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
+        let _writing = state
+            .write_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !state
+            .holdings
+            .end_holding(&hash, &authorization.owner, at)
+            .map_err(ApiError::internal)?
+        {
+            // A blob no one holds is not here to delete; one held only by others is not yours.
+            if state
+                .holdings
+                .live_blob(&hash, at)
+                .map_err(ApiError::internal)?
+                .is_none()
+            {
+                return Err(ApiError::NotFound);
+            }
+            return Err(ApiError::Forbidden(
+                "you hold nothing on this blob, so you cannot delete it".into(),
+            ));
+        }
+        // The holding is ended and reads already 404, so a failed collection is the sweep's to
+        // retry, not a failed delete.
+        if let Err(e) = collect_unheld(&state, at) {
+            eprintln!("collecting unheld blobs after a delete failed: {e}");
+        }
+        Ok(())
+    })
+    .await
+    .map_err(ApiError::internal)??;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// BUD-12 `GET /list/<pubkey>` query parameters, kept as text so a malformed one is a `400`.
+#[derive(Deserialize)]
+struct ListQuery {
+    cursor: Option<String>,
+    limit: Option<String>,
+}
+
+/// BUD-12 `GET /list/<pubkey>`: descriptors of the pubkey's live holdings, paged by `cursor` (the
+/// sha256 of the previous page's last blob) and `limit`.
+async fn list_blobs(
+    State(state): State<SharedState>,
+    Path(pubkey): Path<String>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Vec<Descriptor>>, ApiError> {
+    let cursor = query
+        .cursor
+        .map(|c| {
+            BlobHash::parse(&c)
+                .ok_or_else(|| ApiError::BadRequest("cursor is not a sha256 hash".into()))
+        })
+        .transpose()?;
+    let limit = query
+        .limit
+        .map(|l| {
+            l.parse::<u32>()
+                .map_err(|_| ApiError::BadRequest("limit is not a whole number".into()))
+        })
+        .transpose()?;
+    let pubkey = pubkey.to_ascii_lowercase();
+    let public_url = state.config.public_url().to_owned();
+    let blobs = tokio::task::spawn_blocking(move || {
+        state.holdings.list(&pubkey, now(), cursor.as_ref(), limit)
+    })
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::internal)?;
+    Ok(Json(
+        blobs
+            .into_iter()
+            .map(|(hash, info)| {
+                Descriptor::new(
+                    &public_url,
+                    &hash,
+                    info.size,
+                    info.content_type,
+                    info.uploaded,
+                )
+            })
+            .collect(),
+    ))
 }
 
 /// Parses `<sha256>[.<ext>]`. The extension is only a hint for clients: the blob is always served

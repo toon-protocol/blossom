@@ -55,7 +55,9 @@ another's holding.
 One paid upload buys a fixed **retention period** (30 days on devnet). Uploading again extends the
 holding to max(now, current expiry) plus the period. The expiry is advertised with `Sunset`
 ([ADR 0002](docs/adr/0002-a-payment-buys-a-fixed-retention-period.md)). Expired holdings are
-swept, and a blob's bytes go with its last holding.
+swept, and a blob's bytes go with its last holding. The sweep interval is set with
+`TOON_BLOB_SWEEP_INTERVAL_SECS` (default 1 hour) and the period with `TOON_BLOB_RETENTION_SECS`;
+a blob whose last holding has expired is `404` even before the sweep runs.
 
 A **blob reference** in an event is data only: nothing is enforced, and nothing is kept alive
 because an event names it.
@@ -87,22 +89,30 @@ is a second box; then Garage or SeaweedFS, not MinIO.
 
 Two modes, the same as the store's:
 
-- **Its own bundle**: `deploy/docker-compose.yml` stands up a connector, the blob app and Caddy,
-  with the three routes in its `connector.toml`.
-- **Shared edge**: `deploy/docker-compose.shared-edge.yml` turns the blob app's own connector off
-  and joins an `edge-blossom` network. The host bundle's connector joins that network, and its
-  `connector.toml` and Caddyfile carry the blob app's routes and public host.
+- **Its own bundle**: `deploy/docker-compose.yml` stands up a connector (on an immutable pin of the
+  stock image), the blob app and Caddy. Its read-only `deploy/connector.toml` carries the three
+  routes at their devnet prices, each pointing at its handler on the write port. Blobs are kept on
+  the named volume `blob_data`. Only Caddy publishes ports; the write port is never published, and
+  `deploy/Caddyfile` proxies only the public port's methods and paths (and `/ilp` to the connector).
+- **Shared edge**: `deploy/docker-compose.shared-edge.yml` turns the blob app's own connector (and
+  Caddy) off and joins an `edge-blossom` network, leaving the blob app's image and settings alone.
+  The host bundle's connector joins that network, and its `connector.toml` and Caddyfile carry the
+  blob app's routes and public host.
+
+`tests/deploy_guard.rs` checks these files.
 
 The blob app runs unchanged in either mode.
 
 ## Build and release
 
-Rust, on the relay's toolchain pin and `docs/rust-coding-standards.md`. CI checks the image two
-ways: [blossom-compliance](https://github.com/v0l/blossom-compliance) against a test-only proxy
-that adds a stated payment to the paid paths, and the app's own black-box suite (holdings,
-retention, the `403`, the mirror guard, takedown, the storage cap, the preflight). The own suite
-gates publishing `ghcr.io/toon-protocol/blossom`: a moving `:release` tag and immutable `:sha-*`
-tags on every green merge to `main`.
+Rust, on the relay's toolchain pin and `docs/rust-coding-standards.md`. CI builds the image once
+and runs two suites against that image: the app's own black-box suite (holdings, retention, the
+`403`, the mirror guard, takedown, the storage cap, the preflight) and
+[blossom-compliance](https://github.com/v0l/blossom-compliance) through a test-only proxy that adds a
+stated payment to the paid paths. Pull requests build and run both suites but never publish. On a
+push to `main` where the gate and both suites are green, the workflow pushes that same image to
+`ghcr.io/toon-protocol/blossom` as an immutable `:sha-<full commit SHA>` tag and, if that commit is
+still `main`'s head, the moving `:release` tag. A red suite publishes nothing.
 
 ## License
 

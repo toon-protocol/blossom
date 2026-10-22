@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { test } from 'node:test';
-import { gateFromCi } from './run-gate.ts';
+import { gateFromCi, runGate } from './run-gate.ts';
 
 const CI = `
 name: CI
@@ -99,4 +101,68 @@ test('a GitHub expression in env or working-directory skips the step too', () =>
 test('the expression note names the expression syntax literally', () => {
   const { notes } = gateFromCi('jobs:\n  gate:\n    steps:\n      - run: echo ${{ x }}\n');
   assert.match(notes.join('\n'), /a \$\{\{ \}\} expression/);
+});
+
+// A sandbox whose exec behaves like the sandcastle-agent image's: the script goes to
+// `sh`, which there is dash. dash has no `pipefail`, so a top-level `set` asking for it
+// fails with exit 2 before anything runs, as it did in the AFK runs. Anything else runs
+// for real under the local `sh`, in `cwd`.
+const dashLikeSandbox = (cwd: string) =>
+  ({
+    exec: async (script: string, options?: { onLine?: (line: string) => void }) => {
+      if (/^\s*set\b[^\n]*pipefail/m.test(script)) {
+        return { exitCode: 2, stdout: '', stderr: 'sh: 1: set: Illegal option -o pipefail' };
+      }
+      const run = spawnSync('sh', ['-c', script], { cwd, encoding: 'utf8' });
+      for (const line of `${run.stdout}${run.stderr}`.split('\n').filter(Boolean)) {
+        options?.onLine?.(line);
+      }
+      return { exitCode: run.status ?? 1, stdout: run.stdout, stderr: run.stderr };
+    },
+  }) as unknown as Parameters<typeof runGate>[0];
+
+const step = (command: string) => ({ name: 'step', command });
+const quietly = async <T>(fn: () => Promise<T>): Promise<T> => {
+  const log = console.log;
+  console.log = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.log = log;
+  }
+};
+
+test('a passing step passes the gate on a sandbox whose sh is dash', async () => {
+  const result = await quietly(() => runGate(dashLikeSandbox(tmpdir()), [step('true')]));
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.ran, ['step']);
+});
+
+test('each step runs under bash, not sh', async () => {
+  // $BASH names the running shell: bash invoked as `sh` reports it as sh, and dash leaves it unset.
+  const result = await quietly(() =>
+    runGate(dashLikeSandbox(tmpdir()), [step('test "${BASH##*/}" = bash')])
+  );
+  assert.equal(result.passed, true);
+});
+
+test('each step runs with -e: a failing line stops the step', async () => {
+  const result = await quietly(() =>
+    runGate(dashLikeSandbox(tmpdir()), [step('false\necho after')])
+  );
+  assert.equal(result.passed, false);
+  assert.doesNotMatch(result.failure!.output, /after/);
+});
+
+test('each step runs with pipefail: a failure early in a pipe fails the step', async () => {
+  const result = await quietly(() => runGate(dashLikeSandbox(tmpdir()), [step('false | true')]));
+  assert.equal(result.passed, false);
+});
+
+test('a step containing single quotes survives the quoting', async () => {
+  const result = await quietly(() =>
+    runGate(dashLikeSandbox(tmpdir()), [step(`echo 'one quoted' "it's" 'it'\\''s'\nexit 3`)])
+  );
+  assert.equal(result.failure!.exitCode, 3);
+  assert.equal(result.failure!.output.trim(), "one quoted it's it's");
 });

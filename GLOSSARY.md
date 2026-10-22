@@ -10,6 +10,15 @@ have paid to store and serves them for free. Connector terms (**App**, **Route**
 This app: the one that keeps paid blobs and serves them by hash.
 _Avoid_: Blob server, Blossom server, media server, store
 
+**Bundle**:
+One connector and one or more TOON apps behind it, stood up by one compose file. Every app runs
+in a bundle of its own or in one shared with others, unchanged.
+_Avoid_: Stack, deployment
+
+**Shared edge**:
+Running the blob app behind another bundle's connector, with its own connector off.
+_Avoid_: Shared connector mode, co-hosting
+
 **Store**:
 The separate Arweave upload app (toon-protocol/store) behind `g.toon.store`; never this app.
 _Avoid_: Using "store" for this app, its routes or its blobs

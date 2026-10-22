@@ -17,6 +17,7 @@ pub fn sweep_once(state: &SharedState) -> Result<usize, Box<dyn std::error::Erro
     let unheld = state.holdings.sweep(now())?;
     for hash in &unheld {
         state.files.remove(hash)?;
+        state.holdings.forget(hash)?;
     }
     Ok(unheld.len())
 }
@@ -32,7 +33,7 @@ pub async fn run(state: SharedState, interval: Duration) {
             .await
         {
             Ok(Ok(0)) => {}
-            Ok(Ok(n)) => eprintln!("sweep deleted {n} expired blob(s)"),
+            Ok(Ok(n)) => eprintln!("sweep deleted {n} unheld blob(s)"),
             Ok(Err(e)) => eprintln!("sweep failed: {e}"),
             Err(e) => eprintln!("sweep failed: {e}"),
         }

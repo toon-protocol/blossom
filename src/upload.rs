@@ -107,7 +107,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
                 &job_type,
                 &authorization.owner,
                 &payment,
-                at,
+                now(),
                 retention,
             )
             .map_err(ApiError::internal)
@@ -118,7 +118,8 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
     let Recorded {
         content_type,
         uploaded,
-        expires_at,
+        sunset,
+        ..
     } = recorded;
     let url = blob_url(state.config.public_url(), &hash, &content_type);
     let descriptor = Descriptor {
@@ -135,9 +136,7 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         uploaded,
     };
     let mut response = Json(descriptor).into_response();
-    response
-        .headers_mut()
-        .insert(SUNSET, sunset_value(expires_at));
+    response.headers_mut().insert(SUNSET, sunset_value(sunset));
     Ok(response)
 }
 

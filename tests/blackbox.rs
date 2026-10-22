@@ -348,9 +348,16 @@ fn uploading_again_extends_the_same_owners_holding() {
     let app = App::start();
     let signer = Signer::random();
     let body = random_blob(300);
+    let before = now();
     let (first_descriptor, first) = put_blob(&app, &signer, &body, "text/plain");
+    let after = now();
     let (second_descriptor, second) = put_blob(&app, &signer, &body, "application/octet-stream");
-    assert!(second > first, "{second} should be after {first}");
+    // Paying early loses no time: the second payment adds a whole retention period to the first.
+    let retention = (first - after)..=(first - before);
+    assert!(
+        retention.contains(&(second - first)),
+        "{second} should be {first} plus a retention period in {retention:?}"
+    );
     // The descriptor describes the blob as first recorded, not the second request.
     assert_eq!(second_descriptor["uploaded"], first_descriptor["uploaded"]);
     assert_eq!(second_descriptor["type"], "text/plain");
@@ -362,10 +369,15 @@ fn uploading_again_extends_the_same_owners_holding() {
 fn two_owners_uploading_the_same_bytes_keep_one_blob() {
     let app = App::start();
     let body = random_blob(300);
-    put_blob(&app, &Signer::random(), &body, "text/plain");
-    put_blob(&app, &Signer::random(), &body, "text/plain");
+    let first_owner = Signer::random();
+    put_blob(&app, &first_owner, &body, "text/plain");
+    let (_, later) = put_blob(&app, &first_owner, &body, "text/plain");
+    // The second owner's holding expires first, so the blob's `Sunset` stays the first owner's.
+    let (_, sunset) = put_blob(&app, &Signer::random(), &body, "text/plain");
+    assert_eq!(sunset, later);
     let read = app.read(&sha256_hex(&body)).send().unwrap();
     assert_eq!(status(&read), 200);
+    assert_eq!(sunset_secs(&read), later);
     assert_eq!(read.bytes().unwrap().as_ref(), body.as_slice());
 }
 
@@ -407,28 +419,31 @@ fn read_status(app: &App, hash: &str) -> (u16, u16) {
 
 #[test]
 fn a_blob_is_404_after_its_last_holding_expires_and_stays_readable_while_another_is_live() {
-    let Some(app) = App::start_short(3, 1) else {
+    let Some(app) = App::start_short(6, 1) else {
         return;
     };
     let (early, late) = (Signer::random(), Signer::random());
     let body = random_blob(200);
     let hash = sha256_hex(&body);
-    put_blob(&app, &early, &body, "text/plain");
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    let (_, early_sunset) = put_blob(&app, &early, &body, "text/plain");
+    std::thread::sleep(std::time::Duration::from_secs(3));
     let (_, late_sunset) = put_blob(&app, &late, &body, "text/plain");
-    // The first holding expires while the second is live.
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert!(late_sunset > early_sunset);
+    assert_eq!(sunset_secs(&app.read(&hash).send().unwrap()), late_sunset);
+
+    wait_until("the first holding to expire", || now() >= early_sunset);
     assert_eq!(read_status(&app, &hash), (200, 200));
     let read = app.read(&hash).send().unwrap();
     assert_eq!(sunset_secs(&read), late_sunset);
     assert_eq!(read.bytes().unwrap().as_ref(), body.as_slice());
+
     wait_until("the last holding to expire", || {
         read_status(&app, &hash) == (404, 404)
     });
 }
 
 #[test]
-fn an_expired_blob_can_be_uploaded_again() {
+fn an_expired_and_swept_blob_can_be_uploaded_again_afresh() {
     let Some(app) = App::start_short(2, 1) else {
         return;
     };
@@ -437,7 +452,16 @@ fn an_expired_blob_can_be_uploaded_again() {
     let hash = sha256_hex(&body);
     put_blob(&app, &signer, &body, "text/plain");
     wait_until("expiry", || read_status(&app, &hash).0 == 404);
+    // Outlast a sweep interval, so the blob's bytes have been deleted.
     std::thread::sleep(std::time::Duration::from_secs(2));
-    put_blob(&app, &signer, &body, "text/plain");
-    assert_eq!(read_status(&app, &hash), (200, 200));
+    assert_eq!(read_status(&app, &hash), (404, 404));
+
+    let before = now();
+    let (descriptor, sunset) = put_blob(&app, &signer, &body, "image/png");
+    assert!((before + 2..=now() + 2).contains(&sunset), "{sunset}");
+    assert_eq!(descriptor["type"], "image/png");
+    assert!(descriptor["uploaded"].as_u64().unwrap() >= before);
+    let read = app.read(&hash).send().unwrap();
+    assert_eq!(status(&read), 200);
+    assert_eq!(read.bytes().unwrap().as_ref(), body.as_slice());
 }

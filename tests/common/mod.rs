@@ -27,29 +27,36 @@ pub struct App {
 
 impl App {
     pub fn start() -> Self {
-        Self::launch("3600", "3600").expect("a default app always starts")
+        Self::running_container().unwrap_or_else(|| Self::spawn(3600, 3600))
     }
 
     /// An app with a retention period and sweep interval of a few seconds, for the expiry tests.
     /// `None` against an already-running container, whose settings the suite cannot choose.
     pub fn start_short(retention_secs: u32, sweep_secs: u32) -> Option<Self> {
-        Self::launch(&retention_secs.to_string(), &sweep_secs.to_string())
+        if Self::running_container().is_some() {
+            eprintln!("skipped: the expiry tests need an app the suite starts itself");
+            return None;
+        }
+        Some(Self::spawn(retention_secs, sweep_secs))
     }
 
-    fn launch(retention: &str, sweep: &str) -> Option<Self> {
-        let client = Client::builder().build().unwrap();
-        if let (Ok(write_url), Ok(public_url)) = (
+    fn running_container() -> Option<Self> {
+        let (Ok(write_url), Ok(public_url)) = (
             std::env::var("BLOSSOM_TEST_WRITE_URL"),
             std::env::var("BLOSSOM_TEST_PUBLIC_URL"),
-        ) {
-            return (retention == "3600").then_some(Self {
-                write_url,
-                public_url,
-                client,
-                child: None,
-                _storage: None,
-            });
-        }
+        ) else {
+            return None;
+        };
+        Some(Self {
+            write_url,
+            public_url,
+            client: Client::new(),
+            child: None,
+            _storage: None,
+        })
+    }
+
+    fn spawn(retention_secs: u32, sweep_secs: u32) -> Self {
         let storage = tempfile::tempdir().unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_blossom"))
             .args([
@@ -59,8 +66,8 @@ impl App {
                 "127.0.0.1:0",
             ])
             .args(["--public-url", "http://blobs.test"])
-            .args(["--retention-secs", retention])
-            .args(["--sweep-interval-secs", sweep])
+            .args(["--retention-secs", &retention_secs.to_string()])
+            .args(["--sweep-interval-secs", &sweep_secs.to_string()])
             .arg("--storage-dir")
             .arg(storage.path())
             .stdout(Stdio::piped())
@@ -73,13 +80,13 @@ impl App {
         };
         let write_url = address("write port listening on ");
         let public_url = address("public port listening on ");
-        Some(Self {
+        Self {
             write_url,
             public_url,
-            client,
+            client: Client::new(),
             child: Some(child),
             _storage: Some(storage),
-        })
+        }
     }
 
     /// A `PUT /upload` on the write port with a correct payment statement and no authorization.

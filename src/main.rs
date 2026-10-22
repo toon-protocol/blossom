@@ -1,6 +1,6 @@
 use blossom::config::Config;
 use blossom::state::AppState;
-use blossom::{public, upload};
+use blossom::{public, sweep, upload};
 use clap::Parser;
 use tokio::net::TcpListener;
 
@@ -13,11 +13,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("public port listening on {}", public_listener.local_addr()?);
 
     let state = AppState::open(config)?;
+    let sweeper = sweep::run(
+        state.clone(),
+        std::time::Duration::from_secs(state.config.sweep_interval_secs),
+    );
     let write = axum::serve(write_listener, upload::router(state.clone()));
     let public = axum::serve(public_listener, public::router(state));
     tokio::select! {
         result = write => result?,
         result = public => result?,
+        () = sweeper => {}
         _ = tokio::signal::ctrl_c() => {}
     }
     Ok(())

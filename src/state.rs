@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::blob_files::BlobFiles;
@@ -10,6 +10,9 @@ pub struct AppState {
     pub config: Config,
     pub files: BlobFiles,
     pub holdings: Holdings,
+    /// Held while bytes and holdings change together, so a sweep never deletes the bytes of an
+    /// upload that is part-way recorded.
+    pub write_lock: Mutex<()>,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -25,6 +28,7 @@ impl AppState {
             config,
             files,
             holdings,
+            write_lock: Mutex::new(()),
         }))
     }
 }

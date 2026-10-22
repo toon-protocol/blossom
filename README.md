@@ -55,7 +55,9 @@ another's holding.
 One paid upload buys a fixed **retention period** (30 days on devnet). Uploading again extends the
 holding to max(now, current expiry) plus the period. The expiry is advertised with `Sunset`
 ([ADR 0002](docs/adr/0002-a-payment-buys-a-fixed-retention-period.md)). Expired holdings are
-swept, and a blob's bytes go with its last holding.
+swept, and a blob's bytes go with its last holding. The sweep interval is set with
+`TOON_BLOB_SWEEP_INTERVAL_SECS` (default 1 hour) and the period with `TOON_BLOB_RETENTION_SECS`;
+a blob whose last holding has expired is `404` even before the sweep runs.
 
 A **blob reference** in an event is data only: nothing is enforced, and nothing is kept alive
 because an event names it.

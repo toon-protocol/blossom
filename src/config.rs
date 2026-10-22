@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 const THIRTY_DAYS_SECS: u64 = 30 * 24 * 60 * 60;
+const ONE_HOUR_SECS: u64 = 60 * 60;
 
 /// Settings: each is an environment variable and a matching flag.
 #[derive(Clone, Debug, Parser)]
@@ -28,6 +29,11 @@ pub struct Config {
     /// The retention period one paid upload adds to its holding, in seconds (default 30 days).
     #[arg(long, env = "TOON_BLOB_RETENTION_SECS", default_value_t = THIRTY_DAYS_SECS)]
     pub retention_secs: u64,
+
+    /// How often the sweep ends expired holdings and deletes unheld blobs, in seconds (default 1 hour).
+    #[arg(long, env = "TOON_BLOB_SWEEP_INTERVAL_SECS", default_value_t = ONE_HOUR_SECS,
+          value_parser = clap::value_parser!(u64).range(1..))]
+    pub sweep_interval_secs: u64,
 }
 
 impl Config {

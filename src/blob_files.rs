@@ -57,4 +57,15 @@ impl BlobFiles {
         file.persist(&dest).map_err(|e| e.error)?;
         Ok(())
     }
+
+    /// Deletes the blob's bytes; a blob already gone is not an error.
+    ///
+    /// # Errors
+    /// Fails on an I/O error other than the file being absent.
+    pub fn remove(&self, hash: &BlobHash) -> io::Result<()> {
+        match fs::remove_file(self.path(hash)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    }
 }

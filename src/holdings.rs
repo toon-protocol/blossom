@@ -139,6 +139,54 @@ impl Holdings {
         })
     }
 
+    /// Ends the owner's live holding on the blob; true if there was one to end. Other owners'
+    /// holdings are untouched. The bytes of a blob left with no holding are removed by the sweep
+    /// pass the caller runs next.
+    ///
+    /// # Errors
+    /// Fails on a database error.
+    pub fn end_holding(&self, hash: &BlobHash, owner: &str, now: u64) -> rusqlite::Result<bool> {
+        let ended = self.db().execute(
+            "DELETE FROM holdings WHERE sha256 = ?1 AND owner = ?2 AND expires_at > ?3",
+            params![hash.as_str(), owner, now],
+        )?;
+        Ok(ended > 0)
+    }
+
+    /// The blobs the owner holds live at `now`, newest upload first.
+    ///
+    /// # Errors
+    /// Fails on a database error.
+    pub fn list(&self, owner: &str, now: u64) -> rusqlite::Result<Vec<(BlobHash, BlobInfo)>> {
+        let db = self.db();
+        let mut stmt = db.prepare(
+            "SELECT b.sha256, b.size, b.content_type, b.uploaded,
+                    (SELECT MAX(expires_at) FROM holdings WHERE sha256 = b.sha256)
+             FROM blobs b JOIN holdings h ON h.sha256 = b.sha256
+             WHERE h.owner = ?1 AND h.expires_at > ?2
+             ORDER BY b.uploaded DESC, b.sha256",
+        )?;
+        let rows = stmt.query_map(params![owner, now], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                BlobInfo {
+                    size: row.get(1)?,
+                    content_type: row.get(2)?,
+                    uploaded: row.get(3)?,
+                    sunset: row.get(4)?,
+                },
+            ))
+        })?;
+        let mut blobs = Vec::new();
+        for row in rows {
+            let (hash, info) = row?;
+            if let Some(hash) = BlobHash::parse(&hash) {
+                blobs.push((hash, info));
+            }
+        }
+        Ok(blobs)
+    }
+
     /// Ends the holdings that expired at or before `now` and returns every blob left with none, so
     /// their bytes can be deleted and then the blobs forgotten. A blob stays listed until it is
     /// forgotten, so a pass that fails part-way is finished by the next.
@@ -260,6 +308,24 @@ mod tests {
         assert!(h.sweep(160).unwrap().is_empty());
         assert!(h.live_blob(&x, 160).unwrap().is_some());
         assert_eq!(h.sweep(250).unwrap(), vec![x]);
+    }
+
+    #[test]
+    fn ending_a_holding_leaves_other_owners_and_list_shows_only_live_ones() {
+        let h = Holdings::init(Connection::open_in_memory().unwrap()).unwrap();
+        let hash = BlobHash::of(b"x");
+        h.record(&hash, 1, "text/plain", "a", &payment(), 100, 50)
+            .unwrap();
+        h.record(&hash, 1, "text/plain", "b", &payment(), 100, 100)
+            .unwrap();
+        assert_eq!(h.list("a", 120).unwrap().len(), 1);
+        assert!(!h.end_holding(&hash, "c", 120).unwrap());
+        assert!(h.end_holding(&hash, "a", 120).unwrap());
+        assert!(!h.end_holding(&hash, "a", 120).unwrap());
+        assert!(h.list("a", 120).unwrap().is_empty());
+        assert_eq!(h.live_blob(&hash, 120).unwrap().unwrap().sunset, 200);
+        assert_eq!(h.list("b", 120).unwrap()[0].1.sunset, 200);
+        assert!(h.list("b", 200).unwrap().is_empty());
     }
 
     #[test]

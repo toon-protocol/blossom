@@ -465,3 +465,124 @@ fn an_expired_and_swept_blob_can_be_uploaded_again_afresh() {
     assert_eq!(status(&read), 200);
     assert_eq!(read.bytes().unwrap().as_ref(), body.as_slice());
 }
+
+fn delete(app: &App, hash: &str, authorization: Option<String>) -> Response {
+    let mut request = app.client.delete(format!("{}/{hash}", app.public_url));
+    if let Some(authorization) = authorization {
+        request = request.header("authorization", authorization);
+    }
+    request.send().unwrap()
+}
+
+fn delete_authorization(signer: &Signer, hash: &str) -> String {
+    signer.authorization("delete", hash, now() - 10, now() + 600)
+}
+
+fn listed(app: &App, pubkey: &str) -> Vec<serde_json::Value> {
+    let response = app.read(&format!("list/{pubkey}")).send().unwrap();
+    assert_eq!(status(&response), 200);
+    response.json().unwrap()
+}
+
+#[test]
+fn an_owners_delete_ends_their_holding_and_the_blob_is_404() {
+    let app = App::start();
+    let owner = Signer::random();
+    let body = random_blob(300);
+    let hash = sha256_hex(&body);
+    put_blob(&app, &owner, &body, "text/plain");
+
+    let response = delete(&app, &hash, Some(delete_authorization(&owner, &hash)));
+    assert!(status(&response) == 200 || status(&response) == 204);
+    assert_eq!(read_status(&app, &hash), (404, 404));
+    assert!(listed(&app, &owner.pubkey()).is_empty());
+    // The holding is gone, so a second delete is refused.
+    let again = delete(&app, &hash, Some(delete_authorization(&owner, &hash)));
+    assert_eq!(status(&again), 403);
+}
+
+#[test]
+fn with_two_owners_one_delete_leaves_the_blob_readable_with_the_remaining_sunset() {
+    let Some(app) = App::start_short(6, 1) else {
+        return;
+    };
+    let (first, second) = (Signer::random(), Signer::random());
+    let body = random_blob(300);
+    let hash = sha256_hex(&body);
+    put_blob(&app, &first, &body, "text/plain");
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let (_, second_sunset) = put_blob(&app, &second, &body, "text/plain");
+
+    // The later holding goes; the sunset falls back to the earlier one.
+    let response = delete(&app, &hash, Some(delete_authorization(&second, &hash)));
+    assert!(status(&response) == 200 || status(&response) == 204);
+    let read = app.read(&hash).send().unwrap();
+    assert_eq!(status(&read), 200);
+    assert!(sunset_secs(&read) < second_sunset);
+    assert_eq!(read.bytes().unwrap().as_ref(), body.as_slice());
+    assert_eq!(listed(&app, &first.pubkey()).len(), 1);
+    assert!(listed(&app, &second.pubkey()).is_empty());
+}
+
+#[test]
+fn a_delete_by_a_non_owner_or_without_a_valid_authorization_changes_nothing() {
+    let app = App::start();
+    let (owner, stranger) = (Signer::random(), Signer::random());
+    let body = random_blob(300);
+    let other = random_blob(300);
+    let hash = sha256_hex(&body);
+    put_blob(&app, &owner, &body, "text/plain");
+
+    let refused = delete(&app, &hash, Some(delete_authorization(&stranger, &hash)));
+    assert_eq!(status(&refused), 403);
+    assert_eq!(status(&delete(&app, &hash, None)), 401);
+    let upload_verb = owner.authorization("upload", &hash, now() - 10, now() + 600);
+    assert_eq!(status(&delete(&app, &hash, Some(upload_verb))), 401);
+    let wrong_hash = delete_authorization(&owner, &sha256_hex(&other));
+    assert_eq!(status(&delete(&app, &hash, Some(wrong_hash))), 401);
+    let expired = owner.authorization("delete", &hash, now() - 100, now() - 50);
+    assert_eq!(status(&delete(&app, &hash, Some(expired))), 401);
+
+    assert_eq!(read_status(&app, &hash), (200, 200));
+    assert_eq!(listed(&app, &owner.pubkey()).len(), 1);
+}
+
+#[test]
+fn list_returns_exactly_the_pubkeys_live_blobs_and_drops_deleted_and_expired_ones() {
+    let Some(app) = App::start_short(4, 1) else {
+        return;
+    };
+    let (owner, other) = (Signer::random(), Signer::random());
+    let (kept, deleted, expiring, others) = (
+        random_blob(100),
+        random_blob(110),
+        random_blob(120),
+        random_blob(130),
+    );
+    put_blob(&app, &owner, &expiring, "text/plain");
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    put_blob(&app, &owner, &kept, "image/png");
+    put_blob(&app, &owner, &deleted, "text/plain");
+    put_blob(&app, &other, &others, "text/plain");
+
+    let hash = sha256_hex(&deleted);
+    delete(&app, &hash, Some(delete_authorization(&owner, &hash)));
+    wait_until("the first blob to expire", || {
+        read_status(&app, &sha256_hex(&expiring)).0 == 404
+    });
+
+    let list = listed(&app, &owner.pubkey());
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["sha256"], sha256_hex(&kept));
+    assert_eq!(list[0]["size"], 100);
+    assert_eq!(list[0]["type"], "image/png");
+    assert!(
+        list[0]["url"]
+            .as_str()
+            .unwrap()
+            .contains(&sha256_hex(&kept))
+    );
+    assert!(list[0]["nip94"].is_array());
+    assert_eq!(listed(&app, &other.pubkey()).len(), 1);
+    assert!(listed(&app, &Signer::random().pubkey()).is_empty());
+}

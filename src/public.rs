@@ -7,10 +7,16 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders};
 
+use axum::Json;
+use std::sync::PoisonError;
+
+use crate::auth::Authorization;
+use crate::descriptor::Descriptor;
 use crate::error::ApiError;
 use crate::hash::BlobHash;
 use crate::state::{SharedState, now};
 use crate::sunset::{SUNSET, sunset_value};
+use crate::sweep::collect_unheld;
 
 /// The paid paths: a `PUT` to any of them on the public port is refused.
 const PAID_PATHS: [&str; 3] = ["/upload", "/mirror", "/media"];
@@ -21,7 +27,8 @@ pub fn router(state: SharedState) -> Router {
         router = router.route(path, put(refuse_put));
     }
     router
-        .route("/{name}", get(read_blob))
+        .route("/{name}", get(read_blob).delete(delete_blob))
+        .route("/list/{pubkey}", get(list_blobs))
         .layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::any())
@@ -41,6 +48,75 @@ pub fn router(state: SharedState) -> Router {
 
 async fn refuse_put() -> ApiError {
     ApiError::UploadsGoThroughToon
+}
+
+/// BUD-02 `DELETE /<sha256>`: ends only the signer's holding. When it was the last, the bytes go.
+async fn delete_blob(
+    State(state): State<SharedState>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let at = now();
+    let authorization = Authorization::verify_for(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok()),
+        at,
+        "delete",
+    )?;
+    let hash = parse_name(&name).ok_or(ApiError::NotFound)?;
+    if !authorization.covers(&hash) {
+        return Err(ApiError::Unauthorized(
+            "invalid authorization: no x tag for this blob".into(),
+        ));
+    }
+    tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
+        let _writing = state
+            .write_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !state
+            .holdings
+            .end_holding(&hash, &authorization.owner, at)
+            .map_err(ApiError::internal)?
+        {
+            return Err(ApiError::Forbidden(
+                "you hold nothing on this blob, so you cannot delete it".into(),
+            ));
+        }
+        collect_unheld(&state, at).map_err(ApiError::internal)?;
+        Ok(())
+    })
+    .await
+    .map_err(ApiError::internal)??;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// BUD-12 `GET /list/<pubkey>`: descriptors of the pubkey's live holdings.
+async fn list_blobs(
+    State(state): State<SharedState>,
+    Path(pubkey): Path<String>,
+) -> Result<Json<Vec<Descriptor>>, ApiError> {
+    let pubkey = pubkey.to_ascii_lowercase();
+    let public_url = state.config.public_url().to_owned();
+    let blobs = tokio::task::spawn_blocking(move || state.holdings.list(&pubkey, now()))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::internal)?;
+    Ok(Json(
+        blobs
+            .into_iter()
+            .map(|(hash, info)| {
+                Descriptor::new(
+                    &public_url,
+                    &hash,
+                    info.size,
+                    info.content_type,
+                    info.uploaded,
+                )
+            })
+            .collect(),
+    ))
 }
 
 /// Parses `<sha256>[.<ext>]`. The extension is only a hint for clients: the blob is always served

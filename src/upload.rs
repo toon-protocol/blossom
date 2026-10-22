@@ -9,9 +9,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::put;
 use axum::{Json, Router};
 use http_body_util::LengthLimitError;
-use serde::Serialize;
 
-use crate::auth::UploadAuthorization;
+use crate::auth::Authorization;
+use crate::descriptor::Descriptor;
 use crate::error::ApiError;
 use crate::hash::BlobHash;
 use crate::holdings::Recorded;
@@ -28,24 +28,12 @@ pub fn router(state: SharedState) -> Router {
         .with_state(state)
 }
 
-/// A BUD-02 blob descriptor with BUD-08 `nip94` tags.
-#[derive(Debug, Serialize)]
-struct Descriptor {
-    url: String,
-    sha256: String,
-    size: u64,
-    #[serde(rename = "type")]
-    content_type: String,
-    uploaded: u64,
-    nip94: Vec<Vec<String>>,
-}
-
 async fn upload(State(state): State<SharedState>, request: Request) -> Result<Response, ApiError> {
     let (parts, body) = request.into_parts();
     let at = now();
 
     let payment = Payment::from_headers(&parts.headers)?;
-    let authorization = UploadAuthorization::verify(
+    let authorization = Authorization::verify(
         parts
             .headers
             .get(header::AUTHORIZATION)
@@ -121,20 +109,13 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         sunset,
         ..
     } = recorded;
-    let url = blob_url(state.config.public_url(), &hash, &content_type);
-    let descriptor = Descriptor {
-        nip94: vec![
-            vec!["url".into(), url.clone()],
-            vec!["m".into(), content_type.clone()],
-            vec!["x".into(), hash.to_string()],
-            vec!["size".into(), size.to_string()],
-        ],
-        url,
-        sha256: hash.to_string(),
+    let descriptor = Descriptor::new(
+        state.config.public_url(),
+        &hash,
         size,
         content_type,
         uploaded,
-    };
+    );
     let mut response = Json(descriptor).into_response();
     response.headers_mut().insert(SUNSET, sunset_value(sunset));
     Ok(response)
@@ -150,12 +131,4 @@ fn claimed_hash(headers: &HeaderMap) -> Result<Option<BlobHash>, ApiError> {
                 .ok_or_else(|| ApiError::BadRequest("X-SHA-256 is not a sha256 hash".into()))
         })
         .transpose()
-}
-
-fn blob_url(public_url: &str, hash: &BlobHash, content_type: &str) -> String {
-    let essence = content_type.split(';').next().unwrap_or("").trim();
-    match mime_guess::get_mime_extensions_str(essence).and_then(|e| e.first()) {
-        Some(ext) => format!("{public_url}/{hash}.{ext}"),
-        None => format!("{public_url}/{hash}"),
-    }
 }

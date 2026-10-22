@@ -94,9 +94,9 @@ and runs two suites against that image: the app's own black-box suite (holdings,
 `403`, the mirror guard, takedown, the storage cap, the preflight) and
 [blossom-compliance](https://github.com/v0l/blossom-compliance) through a test-only proxy that adds a
 stated payment to the paid paths. Pull requests build and run both suites but never publish. On a
-push to `main` where both suites are green, the workflow pushes that same image to
-`ghcr.io/toon-protocol/blossom` as a moving `:release` tag and an immutable `:sha-<commit>` tag. A
-red suite publishes nothing.
+push to `main` where the gate and both suites are green, the workflow pushes that same image to
+`ghcr.io/toon-protocol/blossom` as an immutable `:sha-<full commit SHA>` tag and, if that commit is
+still `main`'s head, the moving `:release` tag. A red suite publishes nothing.
 
 ## License
 

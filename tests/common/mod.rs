@@ -17,6 +17,9 @@ use k256::schnorr::signature::hazmat::PrehashSigner;
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use sha2::{Digest, Sha256};
 
+/// A storage cap large enough that no test reaches it.
+const OPEN_CAP: [&str; 2] = ["--storage-cap-bytes", "1000000000"];
+
 pub struct App {
     pub write_url: String,
     pub public_url: String,
@@ -26,8 +29,9 @@ pub struct App {
 }
 
 impl App {
+    /// The app with a generous storage cap, so the paid path is open.
     pub fn start() -> Self {
-        Self::running_container().unwrap_or_else(|| Self::spawn(3600, 3600))
+        Self::running_container().unwrap_or_else(|| Self::spawn(3600, 3600, &OPEN_CAP))
     }
 
     /// An app with a retention period and sweep interval of a few seconds, for the expiry tests.
@@ -37,7 +41,35 @@ impl App {
             eprintln!("skipped: the expiry tests need an app the suite starts itself");
             return None;
         }
-        Some(Self::spawn(retention_secs, sweep_secs))
+        Some(Self::spawn(retention_secs, sweep_secs, &OPEN_CAP))
+    }
+
+    /// The app with exactly `settings` as its limits (and no storage cap unless they give one).
+    /// `None` against an already-running container, whose settings the suite cannot choose.
+    pub fn start_with(settings: &[&str]) -> Option<Self> {
+        if Self::running_container().is_some() {
+            eprintln!("skipped: the limit tests need an app the suite starts itself");
+            return None;
+        }
+        Some(Self::spawn(3600, 3600, settings))
+    }
+
+    /// A `HEAD /upload` on the public port, with the headers a client would send.
+    pub fn preflight(
+        &self,
+        length: usize,
+        content_type: &str,
+        hash: Option<&str>,
+    ) -> RequestBuilder {
+        let request = self
+            .client
+            .head(format!("{}/upload", self.public_url))
+            .header("x-content-length", length.to_string())
+            .header("x-content-type", content_type);
+        match hash {
+            Some(hash) => request.header("x-sha-256", hash),
+            None => request,
+        }
     }
 
     fn running_container() -> Option<Self> {
@@ -56,7 +88,7 @@ impl App {
         })
     }
 
-    fn spawn(retention_secs: u32, sweep_secs: u32) -> Self {
+    fn spawn(retention_secs: u32, sweep_secs: u32, settings: &[&str]) -> Self {
         let storage = tempfile::tempdir().unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_blossom"))
             .args([
@@ -68,6 +100,7 @@ impl App {
             .args(["--public-url", "http://blobs.test"])
             .args(["--retention-secs", &retention_secs.to_string()])
             .args(["--sweep-interval-secs", &sweep_secs.to_string()])
+            .args(settings)
             .arg("--storage-dir")
             .arg(storage.path())
             .stdout(Stdio::piped())

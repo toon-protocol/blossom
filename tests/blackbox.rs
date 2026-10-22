@@ -485,3 +485,108 @@ fn an_expired_and_swept_blob_can_be_uploaded_again_afresh() {
     assert_eq!(status(&read), 200);
     assert_eq!(read.bytes().unwrap().as_ref(), body.as_slice());
 }
+
+/// What a paid upload of `body` answers, with the status and the `X-Reason`.
+fn paid_upload(app: &App, body: &[u8], content_type: &str) -> (u16, Option<String>) {
+    let response = app
+        .upload(body)
+        .header("authorization", Signer::random().upload_authorization(body))
+        .header("content-type", content_type)
+        .send()
+        .unwrap();
+    let reason = response
+        .headers()
+        .get("x-reason")
+        .map(|v| v.to_str().unwrap().to_owned());
+    (status(&response), reason)
+}
+
+/// What the preflight answers for the same blob.
+fn preflight(app: &App, body: &[u8], content_type: &str) -> (u16, Option<String>) {
+    let response = app
+        .preflight(body.len(), content_type, Some(&sha256_hex(body)))
+        .send()
+        .unwrap();
+    let reason = response
+        .headers()
+        .get("x-reason")
+        .map(|v| v.to_str().unwrap().to_owned());
+    (status(&response), reason)
+}
+
+/// Asserts the preflight and the paid upload answer the same, and returns that answer.
+fn both_agree(app: &App, body: &[u8], content_type: &str) -> u16 {
+    let checked = preflight(app, body, content_type);
+    let paid = paid_upload(app, body, content_type);
+    assert_eq!(checked, paid, "the preflight and the paid upload disagree");
+    paid.0
+}
+
+#[test]
+fn with_no_storage_cap_set_the_preflight_and_the_upload_both_refuse() {
+    let Some(app) = App::start_with(&[]) else {
+        return;
+    };
+    let body = random_blob(100);
+    assert_eq!(both_agree(&app, &body, "text/plain"), 507);
+}
+
+#[test]
+fn a_blob_over_the_size_limit_gets_413_from_the_preflight_and_the_upload() {
+    let Some(app) =
+        App::start_with(&["--storage-cap-bytes", "1000000", "--max-blob-bytes", "1000"])
+    else {
+        return;
+    };
+    assert_eq!(both_agree(&app, &random_blob(1001), "text/plain"), 413);
+    assert_eq!(both_agree(&app, &random_blob(1000), "text/plain"), 200);
+}
+
+#[test]
+fn the_default_size_limit_is_just_under_the_connectors_2_mib_cap() {
+    let app = App::start();
+    let limit = 2 * 1024 * 1024;
+    let at_limit = app.preflight(limit - 1, "text/plain", None).send().unwrap();
+    assert_eq!(status(&at_limit), 413);
+    let fits = app.preflight(1_900_000, "text/plain", None).send().unwrap();
+    assert_eq!(status(&fits), 200);
+}
+
+#[test]
+fn a_type_outside_the_allowlist_is_refused_by_both_and_a_listed_type_is_accepted_by_both() {
+    let Some(app) = App::start_with(&[
+        "--storage-cap-bytes",
+        "1000000",
+        "--allowed-content-types",
+        "image/png,text/plain",
+    ]) else {
+        return;
+    };
+    assert_eq!(both_agree(&app, &random_blob(50), "application/zip"), 415);
+    assert_eq!(both_agree(&app, &random_blob(50), "image/png"), 200);
+    assert_eq!(
+        both_agree(&app, &random_blob(50), "Text/Plain; charset=utf-8"),
+        200
+    );
+}
+
+#[test]
+fn once_the_storage_cap_would_be_exceeded_both_refuse() {
+    let Some(app) = App::start_with(&["--storage-cap-bytes", "250"]) else {
+        return;
+    };
+    let first = random_blob(200);
+    assert_eq!(both_agree(&app, &first, "text/plain"), 200);
+    assert_eq!(both_agree(&app, &random_blob(100), "text/plain"), 507);
+    // Bytes already kept add nothing, so extending the holding still fits.
+    assert_eq!(both_agree(&app, &first, "text/plain"), 200);
+    assert_eq!(both_agree(&app, &random_blob(50), "text/plain"), 200);
+}
+
+#[test]
+fn the_preflight_is_free_and_stores_nothing() {
+    let app = App::start();
+    let body = random_blob(100);
+    assert_eq!(preflight(&app, &body, "text/plain").0, 200);
+    assert_eq!(status(&app.read(&sha256_hex(&body)).send().unwrap()), 404);
+}

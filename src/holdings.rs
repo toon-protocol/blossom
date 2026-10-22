@@ -174,6 +174,19 @@ impl Holdings {
         Ok(())
     }
 
+    /// The bytes kept at `now`: the size of every blob with a live holding, each counted once.
+    ///
+    /// # Errors
+    /// Fails on a database error.
+    pub fn kept_bytes(&self, now: u64) -> rusqlite::Result<u64> {
+        self.db().query_row(
+            "SELECT COALESCE(SUM(size), 0) FROM blobs
+             WHERE sha256 IN (SELECT sha256 FROM holdings WHERE expires_at > ?1)",
+            params![now],
+            |row| row.get(0),
+        )
+    }
+
     /// The blob, if any holding on it is still live at `now`.
     ///
     /// # Errors

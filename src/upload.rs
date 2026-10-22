@@ -11,6 +11,7 @@ use axum::{Json, Router};
 use http_body_util::LengthLimitError;
 use serde::Serialize;
 
+use crate::acceptance::{self, Candidate};
 use crate::auth::UploadAuthorization;
 use crate::error::ApiError;
 use crate::hash::BlobHash;
@@ -18,9 +19,6 @@ use crate::holdings::Recorded;
 use crate::payment::Payment;
 use crate::state::{SharedState, now};
 use crate::sunset::{SUNSET, sunset_value};
-
-/// The connector caps a paid request at 2 MiB; a body larger than this is refused outright.
-pub const MAX_BLOB_BYTES: usize = 2 * 1024 * 1024;
 
 pub fn router(state: SharedState) -> Router {
     Router::new()
@@ -62,10 +60,12 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         ));
     }
 
-    let bytes = to_bytes(body, MAX_BLOB_BYTES).await.map_err(|e| {
+    let max_bytes = state.config.max_blob_bytes;
+    let read_limit = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+    let bytes = to_bytes(body, read_limit).await.map_err(|e| {
         let inner = e.into_inner();
         if inner.is::<LengthLimitError>() {
-            ApiError::TooLarge(MAX_BLOB_BYTES)
+            ApiError::TooLarge(max_bytes)
         } else {
             ApiError::BadRequest(format!("could not read the body: {inner}"))
         }
@@ -77,15 +77,17 @@ async fn upload(State(state): State<SharedState>, request: Request) -> Result<Re
         ));
     }
 
-    let content_type = parts
-        .headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .unwrap_or("application/octet-stream")
-        .to_owned();
+    let content_type = declared_type(&parts.headers);
     let size = bytes.len() as u64;
+    let checked = state.clone();
+    let candidate = Candidate {
+        size: Some(size),
+        content_type: Some(content_type.clone()),
+        hash: Some(hash.clone()),
+    };
+    tokio::task::spawn_blocking(move || acceptance::check(&checked, &candidate, at))
+        .await
+        .map_err(ApiError::internal)??;
     let retention = state.config.retention_secs;
 
     let job_state = state.clone();
@@ -163,4 +165,14 @@ fn blob_url(public_url: &str, hash: &BlobHash, content_type: &str) -> String {
         Some(ext) => format!("{public_url}/{hash}.{ext}"),
         None => format!("{public_url}/{hash}"),
     }
+}
+
+fn declared_type(headers: &HeaderMap) -> String {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("application/octet-stream")
+        .to_owned()
 }

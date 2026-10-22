@@ -15,7 +15,13 @@ pub enum ApiError {
     #[error("blob not found")]
     NotFound,
     #[error("blob is larger than the {0} byte limit")]
-    TooLarge(usize),
+    TooLarge(u64),
+    #[error("content type {0} is not allowed on this server")]
+    UnsupportedType(String),
+    #[error(
+        "the storage cap is not set or would be exceeded: this server is not accepting uploads"
+    )]
+    StorageFull,
     #[error("range not satisfiable")]
     RangeNotSatisfiable(u64),
     #[error("internal error")]
@@ -34,6 +40,8 @@ impl ApiError {
             Self::UploadsGoThroughToon => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::UnsupportedType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::StorageFull => StatusCode::INSUFFICIENT_STORAGE,
             Self::RangeNotSatisfiable(_) => StatusCode::RANGE_NOT_SATISFIABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }

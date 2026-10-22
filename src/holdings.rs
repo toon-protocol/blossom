@@ -22,7 +22,7 @@ pub struct BlobInfo {
 /// the first `uploaded` and type) and the expiry of this owner's holding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recorded {
-    /// Whether this upload stored the blob for the first time (no holding was live on its bytes).
+    /// Whether this call stored the blob for the first time (no holding was live on its bytes).
     pub created: bool,
     pub content_type: String,
     pub uploaded: u64,

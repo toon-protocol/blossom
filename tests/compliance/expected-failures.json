@@ -173,5 +173,30 @@
     "bud": "BUD-12",
     "case": "Multiple x tags don't delete multiple blobs",
     "surface": "delete"
+  },
+  {
+    "bud": "BUD-01",
+    "case": "HEAD /<sha256>: HEAD response body is empty",
+    "surface": "unobservable"
+  },
+  {
+    "bud": "BUD-02",
+    "case": "Additional descriptor fields (optional): descriptor may have magnet field",
+    "surface": "optional"
+  },
+  {
+    "bud": "BUD-02",
+    "case": "Additional descriptor fields (optional): descriptor may have infohash field",
+    "surface": "optional"
+  },
+  {
+    "bud": "BUD-02",
+    "case": "Additional descriptor fields (optional): descriptor may have ipfs field",
+    "surface": "optional"
+  },
+  {
+    "bud": "BUD-08",
+    "case": "Mirror returns nip94: mirror succeeds",
+    "surface": "mirror"
   }
 ]

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs blossom-compliance against the built binary, through the test-only proxy, and fails on
-# its results.json. Needs: cargo, node, bun, git. Run from anywhere.
+# its results.json. Needs: cargo, node, bun, git, curl. Run from anywhere.
 #
 # The suite is fetched, not vendored: its repository has no LICENSE file. It is pinned to a
 # commit so a change upstream never turns CI red by itself; bump COMPLIANCE_REF deliberately.
@@ -34,11 +34,18 @@ node "$here/proxy.mjs" "$proxy_port" "http://127.0.0.1:$write_port" "http://127.
   >"$work/proxy.log" 2>&1 &
 pids+=($!)
 
+# Ready once both ports answer through the proxy: it answers 502 while the app is still down.
+reaches_app() {
+  local read write
+  read=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$proxy_port/0")
+  write=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "http://127.0.0.1:$proxy_port/upload")
+  [[ $read != 000 && $read != 502 && $write != 000 && $write != 502 ]]
+}
 for _ in $(seq 30); do
-  curl -s -o /dev/null "http://127.0.0.1:$proxy_port/0" && break
+  reaches_app && break
   sleep 1
 done
-curl -s -o /dev/null "http://127.0.0.1:$proxy_port/0" || {
+reaches_app || {
   echo "the proxy never reached the app" >&2
   cat "$work/app.log" "$work/proxy.log" >&2
   exit 1

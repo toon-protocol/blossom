@@ -514,12 +514,23 @@ fn preflight(app: &App, body: &[u8], content_type: &str) -> (u16, Option<String>
     (status(&response), reason)
 }
 
-/// Asserts the preflight and the paid upload answer the same, and returns that answer.
+/// The refusal in an answer, or `None` when it accepts: the preflight accepts with `200` and a
+/// new upload with `201`, so any `2xx` is acceptance.
+fn refusal(answer: &(u16, Option<String>)) -> Option<&(u16, Option<String>)> {
+    (!(200..300).contains(&answer.0)).then_some(answer)
+}
+
+/// Asserts the preflight and the paid upload both accept or refuse alike, and returns the
+/// preflight's status.
 fn both_agree(app: &App, body: &[u8], content_type: &str) -> u16 {
     let checked = preflight(app, body, content_type);
     let paid = paid_upload(app, body, content_type);
-    assert_eq!(checked, paid, "the preflight and the paid upload disagree");
-    paid.0
+    assert_eq!(
+        refusal(&checked),
+        refusal(&paid),
+        "the preflight and the paid upload disagree: {checked:?} and {paid:?}"
+    );
+    checked.0
 }
 
 #[test]

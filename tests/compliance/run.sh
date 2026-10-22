@@ -28,7 +28,8 @@ git -C "$work/suite" checkout -q FETCH_HEAD
 (cd "$work/suite" && bun install --frozen-lockfile >/dev/null)
 
 "$binary" --write-addr "127.0.0.1:$write_port" --public-addr "127.0.0.1:$public_port" \
-  --public-url "http://127.0.0.1:$proxy_port" --storage-dir "$work/data" >"$work/app.log" 2>&1 &
+  --public-url "http://127.0.0.1:$proxy_port" --storage-dir "$work/data" \
+  --storage-cap-bytes 1000000000 >"$work/app.log" 2>&1 &
 pids+=($!)
 node "$here/proxy.mjs" "$proxy_port" "http://127.0.0.1:$write_port" "http://127.0.0.1:$public_port" \
   >"$work/proxy.log" 2>&1 &

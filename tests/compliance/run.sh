@@ -37,8 +37,8 @@ pids+=($!)
 # Ready once both ports answer through the proxy: it answers 502 while the app is still down.
 reaches_app() {
   local read write
-  read=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$proxy_port/0")
-  write=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "http://127.0.0.1:$proxy_port/upload")
+  read=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$proxy_port/0")
+  write=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -X PUT "http://127.0.0.1:$proxy_port/upload")
   [[ $read != 000 && $read != 502 && $write != 000 && $write != 502 ]]
 }
 for _ in $(seq 30); do

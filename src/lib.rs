@@ -18,4 +18,5 @@ pub mod report;
 pub mod state;
 pub mod sunset;
 pub mod sweep;
+pub mod takedown;
 pub mod upload;

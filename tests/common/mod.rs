@@ -8,6 +8,7 @@
 #![allow(dead_code)]
 
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
 use base64::Engine;
@@ -18,14 +19,14 @@ use reqwest::blocking::{Client, RequestBuilder, Response};
 use sha2::{Digest, Sha256};
 
 /// A storage cap large enough that no test reaches it.
-const OPEN_CAP: [&str; 2] = ["--storage-cap-bytes", "1000000000"];
+pub const OPEN_CAP: [&str; 2] = ["--storage-cap-bytes", "1000000000"];
 
 pub struct App {
     pub write_url: String,
     pub public_url: String,
     pub client: Client,
     child: Option<Child>,
-    _storage: Option<tempfile::TempDir>,
+    storage: Option<tempfile::TempDir>,
 }
 
 impl App {
@@ -85,13 +86,35 @@ impl App {
             public_url,
             client: Client::new(),
             child: None,
-            _storage: None,
+            storage: None,
         })
     }
 
+    /// Stops this app and starts another on the same storage with `settings`. `None` against an
+    /// already-running container.
+    pub fn restart_with(mut self, settings: &[&str]) -> Option<Self> {
+        let storage = self.storage.take()?;
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Some(Self::spawn_in(storage, 3600, 3600, settings))
+    }
+
     fn spawn(retention_secs: u32, sweep_secs: u32, settings: &[&str]) -> Self {
-        let storage = tempfile::tempdir().unwrap();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_blossom"))
+        Self::spawn_in(
+            tempfile::tempdir().unwrap(),
+            retention_secs,
+            sweep_secs,
+            settings,
+        )
+    }
+
+    /// The binary on ephemeral ports over `storage`, with `settings`, not yet started: for the
+    /// tests that watch it start (or fail to).
+    pub fn command(storage: &Path, settings: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_blossom"));
+        command
             .args([
                 "--write-addr",
                 "127.0.0.1:0",
@@ -99,11 +122,21 @@ impl App {
                 "127.0.0.1:0",
             ])
             .args(["--public-url", "http://blobs.test"])
-            .args(["--retention-secs", &retention_secs.to_string()])
-            .args(["--sweep-interval-secs", &sweep_secs.to_string()])
             .args(settings)
             .arg("--storage-dir")
-            .arg(storage.path())
+            .arg(storage);
+        command
+    }
+
+    fn spawn_in(
+        storage: tempfile::TempDir,
+        retention_secs: u32,
+        sweep_secs: u32,
+        settings: &[&str],
+    ) -> Self {
+        let mut child = Self::command(storage.path(), settings)
+            .args(["--retention-secs", &retention_secs.to_string()])
+            .args(["--sweep-interval-secs", &sweep_secs.to_string()])
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
@@ -119,7 +152,7 @@ impl App {
             public_url,
             client: Client::new(),
             child: Some(child),
-            _storage: Some(storage),
+            storage: Some(storage),
         }
     }
 

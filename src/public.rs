@@ -117,7 +117,7 @@ async fn delete_blob(
             .unwrap_or_else(PoisonError::into_inner);
         if !state
             .holdings
-            .end_holding(&hash, &authorization.owner, at)
+            .end_holding(&hash, authorization.owner(), at)
             .map_err(ApiError::internal)?
         {
             // A blob no one holds is not here to delete; one held only by others is not yours.

@@ -1,0 +1,9 @@
+error[E0451]: fields `owner` and `hashes` of struct `Authorization` are private
+ --> tests/compile_fail/authorization_without_verifying.rs:8:9
+  |
+7 |     let _ = Authorization {
+  |             ------------- in this type
+8 |         owner: "0".repeat(64),
+  |         ^^^^^ private field
+9 |         hashes: Vec::new(),
+  |         ^^^^^^ private field

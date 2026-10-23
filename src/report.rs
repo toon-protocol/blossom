@@ -4,27 +4,57 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::StatusCode;
 
-use crate::auth::{Event, verify_signature};
+use nostr::event::Tag;
+
+use crate::auth::{read_event, verify_event};
 use crate::error::{ApiError, read_body};
 use crate::hash::BlobHash;
 use crate::state::{SharedState, now};
 
-const REPORT_KIND: u64 = 1984;
+const REPORT_KIND: u16 = 1984;
 const MAX_REPORT_BYTES: usize = 64 * 1024;
 
 /// A verified report: who made it, which blobs it names and why.
 #[derive(Debug)]
 pub struct Report {
-    pub event_id: String,
-    pub reporter: String,
-    /// Each reported blob with the report type from its `x` tag (`""` when the tag has none).
-    pub blobs: Vec<(BlobHash, String)>,
-    pub content: String,
-    /// The event exactly as received.
-    pub raw: String,
+    event_id: String,
+    reporter: String,
+    blobs: Vec<(BlobHash, String)>,
+    content: String,
+    raw: String,
 }
 
 impl Report {
+    /// The report event's id (64 hex characters).
+    #[must_use]
+    pub fn event_id(&self) -> &str {
+        &self.event_id
+    }
+
+    /// The pubkey that signed the report.
+    #[must_use]
+    pub fn reporter(&self) -> &str {
+        &self.reporter
+    }
+
+    /// Each reported blob with the report type from its `x` tag (`""` when the tag has none).
+    #[must_use]
+    pub fn blobs(&self) -> &[(BlobHash, String)] {
+        &self.blobs
+    }
+
+    /// The reporter's free-text reason.
+    #[must_use]
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    /// The event exactly as received.
+    #[must_use]
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
     /// Parses and verifies a report event.
     ///
     /// # Errors
@@ -32,12 +62,12 @@ impl Report {
     /// by an `x` tag with a sha256 hash, or its id or signature does not verify.
     pub fn parse(body: &[u8]) -> Result<Self, ApiError> {
         let refuse = |why: &str| ApiError::BadRequest(format!("invalid report: {why}"));
-        let event: Event = serde_json::from_slice(body).map_err(|_| refuse("not a Nostr event"))?;
-        if event.kind != REPORT_KIND {
+        let event = read_event(body).ok_or_else(|| refuse("not a Nostr event"))?;
+        if event.kind.as_u16() != REPORT_KIND {
             return Err(refuse("kind must be 1984"));
         }
         let mut blobs: Vec<(BlobHash, String)> = Vec::new();
-        for tag in &event.tags {
+        for tag in event.tags.iter().map(Tag::as_slice) {
             if tag.first().map(String::as_str) != Some("x") {
                 continue;
             }
@@ -50,10 +80,10 @@ impl Report {
         if blobs.is_empty() {
             return Err(refuse("no x tag with a sha256 hash"));
         }
-        verify_signature(&event).map_err(refuse)?;
+        verify_event(&event).map_err(refuse)?;
         Ok(Self {
-            event_id: event.id.to_ascii_lowercase(),
-            reporter: event.pubkey.to_ascii_lowercase(),
+            event_id: event.id.to_hex(),
+            reporter: event.pubkey.to_hex(),
             blobs,
             content: event.content,
             raw: String::from_utf8_lossy(body).into_owned(),
@@ -109,8 +139,8 @@ mod tests {
     #[test]
     fn accepts_a_signed_report_and_reads_its_blob_and_type() {
         let report = Report::parse(&event(1984, &[&["x", X, "spam"]], false)).unwrap();
-        assert_eq!(report.blobs[0].0.as_str(), X);
-        assert_eq!(report.blobs[0].1, "spam");
+        assert_eq!(report.blobs()[0].0.as_str(), X);
+        assert_eq!(report.blobs()[0].1, "spam");
     }
 
     #[test]

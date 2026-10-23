@@ -22,8 +22,9 @@ hex = "0.4"
 http-body-util = "0.1"
 httpdate = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-k256 = { version = "0.13", features = ["schnorr"] }
 mime_guess = "2"
+# The relay's pin: Nostr events and their id and signature checks come from this crate alone.
+nostr = { version = "=0.45.4", default-features = false, features = ["std"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
@@ -36,7 +37,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 tower-http = { version = "0.6", features = ["cors"] }
 
 [dev-dependencies]
+# Tests sign events by hand, as an independent client would, so they never share the app's checks.
+k256 = { version = "0.13", features = ["schnorr"] }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json"] }
 serde_yaml_ng = "0.10"
 toml = "1"
+trybuild = "1"

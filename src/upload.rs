@@ -109,7 +109,7 @@ pub(crate) async fn accept_and_hold(
                 &job_hash,
                 size,
                 &job_type,
-                &authorization.owner,
+                authorization.owner(),
                 &payment,
                 now(),
                 retention,

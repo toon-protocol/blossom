@@ -1,15 +1,20 @@
 //! Black-box harness: starts the app and talks only to its two ports.
 //!
-//! By default it spawns the built binary on ephemeral ports. Set `BLOSSOM_TEST_WRITE_URL` and
-//! `BLOSSOM_TEST_PUBLIC_URL` to run the same suite against a container that is already running.
+//! By default it spawns the built binary on ephemeral ports. Set `BLOSSOM_TEST_IMAGE` to an image
+//! (for example `blossom:ci`) to run the same suite against that image instead: every app the
+//! suite starts is then its own container, on the host network with the same flags, so the image
+//! is held to every test the binary is.
 //! The harness acts as the connector on the write port (it writes the payment statement itself)
 //! and as a Blossom client on the public port.
 
 #![allow(dead_code)]
 
 use std::io::{BufRead, BufReader};
+use std::ops::{Deref, DerefMut};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -25,35 +30,28 @@ pub struct App {
     pub write_url: String,
     pub public_url: String,
     pub client: Client,
-    child: Option<Child>,
+    // Fields drop in this order: the process is killed, then its container is removed, and only
+    // then is the storage it had open deleted.
+    child: Child,
+    launch: Launch,
+    // Only `restart_with` takes it, to hand it to the next app.
     storage: Option<tempfile::TempDir>,
 }
 
 impl App {
     /// The app with a generous storage cap, so the paid path is open.
-    /// Against an already-running container, that container (whose CI cap is as generous).
     pub fn start() -> Self {
-        Self::running_container().unwrap_or_else(|| Self::spawn(3600, 3600, &OPEN_CAP))
+        Self::spawn(3600, 3600, &OPEN_CAP)
     }
 
     /// An app with a retention period and sweep interval of a few seconds, for the expiry tests.
-    /// `None` against an already-running container, whose settings the suite cannot choose.
-    pub fn start_short(retention_secs: u32, sweep_secs: u32) -> Option<Self> {
-        if Self::running_container().is_some() {
-            eprintln!("skipped: the expiry tests need an app the suite starts itself");
-            return None;
-        }
-        Some(Self::spawn(retention_secs, sweep_secs, &OPEN_CAP))
+    pub fn start_short(retention_secs: u32, sweep_secs: u32) -> Self {
+        Self::spawn(retention_secs, sweep_secs, &OPEN_CAP)
     }
 
     /// The app with exactly `settings` as its limits (and no storage cap unless they give one).
-    /// `None` against an already-running container, whose settings the suite cannot choose.
-    pub fn start_with(settings: &[&str]) -> Option<Self> {
-        if Self::running_container().is_some() {
-            eprintln!("skipped: the limit tests need an app the suite starts itself");
-            return None;
-        }
-        Some(Self::spawn(3600, 3600, settings))
+    pub fn start_with(settings: &[&str]) -> Self {
+        Self::spawn(3600, 3600, settings)
     }
 
     /// A `HEAD /upload` on the public port, with the headers a client would send.
@@ -74,31 +72,16 @@ impl App {
         }
     }
 
-    fn running_container() -> Option<Self> {
-        let (Ok(write_url), Ok(public_url)) = (
-            std::env::var("BLOSSOM_TEST_WRITE_URL"),
-            std::env::var("BLOSSOM_TEST_PUBLIC_URL"),
-        ) else {
-            return None;
-        };
-        Some(Self {
-            write_url,
-            public_url,
-            client: Client::new(),
-            child: None,
-            storage: None,
-        })
+    /// Stops this app and starts another on the same storage with `settings`.
+    pub fn restart_with(mut self, settings: &[&str]) -> Self {
+        let storage = self.storage.take().unwrap();
+        drop(self);
+        Self::spawn_in(storage, 3600, 3600, settings)
     }
 
-    /// Stops this app and starts another on the same storage with `settings`. `None` against an
-    /// already-running container.
-    pub fn restart_with(mut self, settings: &[&str]) -> Option<Self> {
-        let storage = self.storage.take()?;
-        if let Some(child) = &mut self.child {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        Some(Self::spawn_in(storage, 3600, 3600, settings))
+    /// Whether the suite runs against an image, where `connector` resolves as it does in a bundle.
+    pub fn is_image() -> bool {
+        std::env::var_os("BLOSSOM_TEST_IMAGE").is_some()
     }
 
     fn spawn(retention_secs: u32, sweep_secs: u32, settings: &[&str]) -> Self {
@@ -110,11 +93,12 @@ impl App {
         )
     }
 
-    /// The binary on ephemeral ports over `storage`, with `settings`, not yet started: for the
-    /// tests that watch it start (or fail to).
-    pub fn command(storage: &Path, settings: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_blossom"));
-        command
+    /// The app on ephemeral ports over `storage`, with `settings`, not yet started: for the
+    /// tests that watch it start (or fail to). Keep the `Launch` until the app is done with:
+    /// dropping it removes the app's container.
+    pub fn launch(storage: &Path, settings: &[&str]) -> Launch {
+        let mut launch = Launch::new(storage);
+        launch
             .args([
                 "--write-addr",
                 "127.0.0.1:0",
@@ -125,7 +109,7 @@ impl App {
             .args(settings)
             .arg("--storage-dir")
             .arg(storage);
-        command
+        launch
     }
 
     fn spawn_in(
@@ -134,7 +118,8 @@ impl App {
         sweep_secs: u32,
         settings: &[&str],
     ) -> Self {
-        let mut child = Self::command(storage.path(), settings)
+        let mut launch = Self::launch(storage.path(), settings);
+        let mut child = launch
             .args(["--retention-secs", &retention_secs.to_string()])
             .args(["--sweep-interval-secs", &sweep_secs.to_string()])
             .stdout(Stdio::piped())
@@ -151,8 +136,9 @@ impl App {
             write_url,
             public_url,
             client: Client::new(),
-            child: Some(child),
+            child,
             storage: Some(storage),
+            launch,
         }
     }
 
@@ -173,9 +159,78 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
-        if let Some(child) = &mut self.child {
-            let _ = child.kill();
-            let _ = child.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Where a container finds `connector`: any private address, as the bundle's compose network would
+/// give it one. Nothing listens there; the mirror guard must refuse before connecting.
+pub const CONNECTOR_ADDRESS: &str = "172.18.0.2";
+
+/// Containers this test process has started, so each gets its own name.
+static STARTED: AtomicU32 = AtomicU32::new(0);
+
+/// How the app is started: the built binary, or with `BLOSSOM_TEST_IMAGE` set, a container of that
+/// image. A container runs on the host network, so it binds loopback like the binary and reaches
+/// the suite's loopback origins. It mounts `storage` at the same path and runs as its owner, so
+/// the flags are the binary's own. Dropping it removes the container: killing `docker run` alone
+/// would leave it running.
+pub struct Launch {
+    command: Command,
+    container: Option<String>,
+}
+
+impl Launch {
+    fn new(storage: &Path) -> Self {
+        let Ok(image) = std::env::var("BLOSSOM_TEST_IMAGE") else {
+            return Self {
+                command: Command::new(env!("CARGO_BIN_EXE_blossom")),
+                container: None,
+            };
+        };
+        let name = format!(
+            "blossom-test-{}-{}",
+            std::process::id(),
+            STARTED.fetch_add(1, Ordering::Relaxed)
+        );
+        let owner = std::fs::metadata(storage).unwrap();
+        let mount = format!("{0}:{0}", storage.display());
+        let mut command = Command::new("docker");
+        command
+            .args(["run", "--rm", "--network", "host", "--name", &name])
+            .args(["--user", &format!("{}:{}", owner.uid(), owner.gid())])
+            .args(["--add-host", &format!("connector:{CONNECTOR_ADDRESS}")])
+            .args(["--volume", &mount])
+            .arg(image);
+        Self {
+            command,
+            container: Some(name),
+        }
+    }
+}
+
+impl Deref for Launch {
+    type Target = Command;
+    fn deref(&self) -> &Command {
+        &self.command
+    }
+}
+
+impl DerefMut for Launch {
+    fn deref_mut(&mut self) -> &mut Command {
+        &mut self.command
+    }
+}
+
+impl Drop for Launch {
+    fn drop(&mut self) {
+        if let Some(name) = &self.container {
+            let _ = Command::new("docker")
+                .args(["rm", "--force", name])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
         }
     }
 }

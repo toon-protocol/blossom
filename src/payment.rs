@@ -8,12 +8,30 @@ use crate::error::ApiError;
 /// the upload authorization's signer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Payment {
-    pub payer: String,
-    pub amount: u128,
-    pub chain: String,
+    payer: String,
+    amount: u128,
+    chain: String,
 }
 
 impl Payment {
+    /// The channel key that paid: never an identity.
+    #[must_use]
+    pub fn payer(&self) -> &str {
+        &self.payer
+    }
+
+    /// The amount the connector states was paid.
+    #[must_use]
+    pub fn amount(&self) -> u128 {
+        self.amount
+    }
+
+    /// The chain the payment settles on (for example `evm:31337`).
+    #[must_use]
+    pub fn chain(&self) -> &str {
+        &self.chain
+    }
+
     /// # Errors
     /// [`ApiError::PaymentStatement`] when a header is missing, empty or (for the amount) not an
     /// unsigned integer.

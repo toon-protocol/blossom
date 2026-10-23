@@ -1,0 +1,5 @@
+error[E0616]: field `owner` of struct `Authorization` is private
+ --> tests/compile_fail/authorization_owner_reassigned.rs:6:19
+  |
+6 |     authorization.owner = "0".repeat(64);
+  |                   ^^^^^ private field

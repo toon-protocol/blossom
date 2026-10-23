@@ -2,36 +2,49 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use k256::schnorr::signature::hazmat::PrehashVerifier;
-use k256::schnorr::{Signature, VerifyingKey};
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
+use nostr::event::{Event, Tag};
 
 use crate::error::ApiError;
 use crate::hash::BlobHash;
 
-const AUTH_KIND: u64 = 24242;
+const AUTH_KIND: u16 = 24242;
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct Event {
-    pub id: String,
-    pub pubkey: String,
-    pub created_at: u64,
-    pub kind: u64,
-    pub tags: Vec<Vec<String>>,
-    pub content: String,
-    pub sig: String,
+/// Reads a NIP-01 event. Its `pubkey` must be 64 lowercase hex characters, as NIP-01 writes it:
+/// the `nostr` crate would also take an `npub` or a `nostr:` URI there.
+pub(crate) fn read_event(json: &[u8]) -> Option<Event> {
+    #[derive(serde::Deserialize)]
+    struct Pubkey<'a> {
+        pubkey: &'a str,
+    }
+    let Pubkey { pubkey } = serde_json::from_slice(json).ok()?;
+    let lowercase_hex = pubkey.len() == 64
+        && pubkey
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    lowercase_hex.then(|| Event::from_json(json).ok()).flatten()
+}
+
+/// Whether the event's id is the hash of its content and its signature is its pubkey's.
+pub(crate) fn verify_event(event: &Event) -> Result<(), &'static str> {
+    event
+        .verify()
+        .map_err(|_| "the event's id or signature is wrong")
 }
 
 /// A verified authorization: who signed it, and which blob hashes it covers.
 #[derive(Debug)]
 pub struct Authorization {
-    /// The signer's pubkey (64 hex characters). This is the blob's owner.
-    pub owner: String,
+    owner: String,
     hashes: Vec<BlobHash>,
 }
 
 impl Authorization {
+    /// The signer's pubkey (64 hex characters). This is the blob's owner.
+    #[must_use]
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
     #[must_use]
     pub fn covers(&self, hash: &BlobHash) -> bool {
         self.hashes.contains(hash)
@@ -72,18 +85,19 @@ impl Authorization {
             .decode(encoded)
             .or_else(|_| URL_SAFE_NO_PAD.decode(encoded.trim_end_matches('=')))
             .map_err(|_| denied("not base64"))?;
-        let event: Event = serde_json::from_slice(&json).map_err(|_| denied("not an event"))?;
+        let event = read_event(&json).ok_or_else(|| denied("not an event"))?;
 
-        if event.kind != AUTH_KIND {
+        if event.kind.as_u16() != AUTH_KIND {
             return Err(denied("kind must be 24242"));
         }
-        if event.created_at > now {
+        if event.created_at.as_secs() > now {
             return Err(denied("created_at is in the future"));
         }
         let tag = |name: &'static str| {
             event
                 .tags
                 .iter()
+                .map(Tag::as_slice)
                 .filter(move |t| t.first().map(String::as_str) == Some(name))
         };
         let expiration = tag("expiration")
@@ -105,50 +119,24 @@ impl Authorization {
         if hashes.is_empty() {
             return Err(denied("no x tag with a sha256 hash"));
         }
-        verify_signature(&event).map_err(denied)?;
+        verify_event(&event).map_err(denied)?;
         Ok(Self {
-            owner: event.pubkey.to_ascii_lowercase(),
+            owner: event.pubkey.to_hex(),
             hashes,
         })
     }
 }
 
-/// Checks that the event's id is the hash of its content and that its signature verifies.
-pub(crate) fn verify_signature(event: &Event) -> Result<(), &'static str> {
-    let serialized = serde_json::to_string(&(
-        0,
-        &event.pubkey,
-        event.created_at,
-        event.kind,
-        &event.tags,
-        &event.content,
-    ))
-    .map_err(|_| "unserializable event")?;
-    let id = Sha256::digest(serialized.as_bytes());
-    if hex::decode(&event.id).ok().as_deref() != Some(&id[..]) {
-        return Err("event id does not match its content");
-    }
-    let key = hex::decode(&event.pubkey)
-        .ok()
-        .and_then(|b| VerifyingKey::from_bytes(&b).ok())
-        .ok_or("bad pubkey")?;
-    let sig = hex::decode(&event.sig)
-        .ok()
-        .and_then(|b| Signature::try_from(b.as_slice()).ok())
-        .ok_or("bad signature encoding")?;
-    key.verify_prehash(&id, &sig)
-        .map_err(|_| "signature does not verify")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k256::schnorr::SigningKey;
     use k256::schnorr::signature::hazmat::PrehashSigner;
+    use k256::schnorr::{Signature, SigningKey};
+    use sha2::{Digest, Sha256};
 
     const NOW: u64 = 1_000_000;
 
-    fn header(kind: u64, tags: &[[&str; 2]], created_at: u64, tamper: bool) -> String {
+    fn header(kind: u16, tags: &[[&str; 2]], created_at: u64, tamper: bool) -> String {
         let key = SigningKey::from_bytes(&[7u8; 32]).unwrap();
         let pubkey = hex::encode(key.verifying_key().to_bytes());
         let tags: Vec<Vec<String>> = tags
@@ -178,7 +166,7 @@ mod tests {
     fn accepts_a_valid_authorization() {
         let h = header(AUTH_KIND, &good_tags(), NOW - 1, false);
         let auth = Authorization::verify(Some(&h), NOW, "blobs.test").unwrap();
-        assert_eq!(auth.owner.len(), 64);
+        assert_eq!(auth.owner().len(), 64);
     }
 
     #[test]
@@ -205,6 +193,31 @@ mod tests {
         assert!(with(&[]), "no server tag means any server");
         assert!(with(&["other.test", "Blobs.Test"]));
         assert!(!with(&["other.test"]));
+    }
+
+    /// `header`'s event with its `pubkey` field rewritten, the id and signature left as signed.
+    fn with_pubkey(header: &str, rewrite: impl Fn(&str) -> String) -> String {
+        let json = STANDARD
+            .decode(header.strip_prefix("Nostr ").unwrap())
+            .unwrap();
+        let mut event: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        event["pubkey"] = rewrite(event["pubkey"].as_str().unwrap()).into();
+        format!("Nostr {}", STANDARD.encode(event.to_string()))
+    }
+
+    #[test]
+    fn a_pubkey_not_in_lowercase_hex_is_refused() {
+        use nostr::key::PublicKey;
+        use nostr::nips::nip19::ToBech32;
+        let h = header(AUTH_KIND, &good_tags(), NOW - 1, false);
+        let npub = |hex: &str| PublicKey::from_hex(hex).unwrap().to_bech32().unwrap();
+        for rewritten in [
+            with_pubkey(&h, str::to_uppercase),
+            with_pubkey(&h, npub),
+            with_pubkey(&h, |hex| format!("nostr:{}", npub(hex))),
+        ] {
+            assert!(Authorization::verify(Some(&rewritten), NOW, "blobs.test").is_err());
+        }
     }
 
     #[test]

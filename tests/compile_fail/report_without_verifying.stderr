@@ -1,0 +1,15 @@
+error[E0451]: fields `event_id`, `reporter`, `blobs`, `content` and `raw` of struct `blossom::report::Report` are private
+  --> tests/compile_fail/report_without_verifying.rs:7:9
+   |
+ 6 |     let _ = Report {
+   |             ------ in this type
+ 7 |         event_id: String::new(),
+   |         ^^^^^^^^ private field
+ 8 |         reporter: String::new(),
+   |         ^^^^^^^^ private field
+ 9 |         blobs: Vec::new(),
+   |         ^^^^^ private field
+10 |         content: String::new(),
+   |         ^^^^^^^ private field
+11 |         raw: String::new(),
+   |         ^^^ private field

@@ -4,8 +4,9 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::StatusCode;
 
-use nostr::event::{Event, Tag};
+use nostr::event::Tag;
 
+use crate::auth::{read_event, verify_event};
 use crate::error::{ApiError, read_body};
 use crate::hash::BlobHash;
 use crate::state::{SharedState, now};
@@ -24,6 +25,7 @@ pub struct Report {
 }
 
 impl Report {
+    /// The report event's id (64 hex characters).
     #[must_use]
     pub fn event_id(&self) -> &str {
         &self.event_id
@@ -41,6 +43,7 @@ impl Report {
         &self.blobs
     }
 
+    /// The reporter's free-text reason.
     #[must_use]
     pub fn content(&self) -> &str {
         &self.content
@@ -59,7 +62,7 @@ impl Report {
     /// by an `x` tag with a sha256 hash, or its id or signature does not verify.
     pub fn parse(body: &[u8]) -> Result<Self, ApiError> {
         let refuse = |why: &str| ApiError::BadRequest(format!("invalid report: {why}"));
-        let event = Event::from_json(body).map_err(|_| refuse("not a Nostr event"))?;
+        let event = read_event(body).ok_or_else(|| refuse("not a Nostr event"))?;
         if event.kind.as_u16() != REPORT_KIND {
             return Err(refuse("kind must be 1984"));
         }
@@ -77,9 +80,7 @@ impl Report {
         if blobs.is_empty() {
             return Err(refuse("no x tag with a sha256 hash"));
         }
-        event
-            .verify()
-            .map_err(|_| refuse("the event's id or signature is wrong"))?;
+        verify_event(&event).map_err(refuse)?;
         Ok(Self {
             event_id: event.id.to_hex(),
             reporter: event.pubkey.to_hex(),

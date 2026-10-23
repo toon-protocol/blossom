@@ -865,7 +865,7 @@ fn the_preflight_and_the_paid_upload_refuse_a_listed_hash() {
 #[test]
 fn a_malformed_blocked_blobs_entry_stops_the_app_starting() {
     let storage = tempfile::tempdir().unwrap();
-    let output = App::command(storage.path(), &["--blocked-blobs", "not-a-hash"])
+    let output = App::launch(storage.path(), &["--blocked-blobs", "not-a-hash"])
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -876,7 +876,7 @@ fn a_malformed_blocked_blobs_entry_stops_the_app_starting() {
 fn the_takedown_list_is_logged_at_startup() {
     let hash = sha256_hex(b"listed");
     let storage = tempfile::tempdir().unwrap();
-    let mut launch = App::command(storage.path(), &["--blocked-blobs", &hash]);
+    let mut launch = App::launch(storage.path(), &["--blocked-blobs", &hash]);
     let mut child = launch
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -1229,7 +1229,7 @@ fn a_mirror_without_the_payment_statement_or_a_url_is_refused() {
 #[test]
 fn a_malformed_mirror_allowed_origins_entry_stops_the_app_starting() {
     let storage = tempfile::tempdir().unwrap();
-    let output = App::command(
+    let output = App::launch(
         storage.path(),
         &["--mirror-allowed-origins", "not an origin"],
     )

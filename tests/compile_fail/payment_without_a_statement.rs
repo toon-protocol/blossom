@@ -1,4 +1,4 @@
-//! A `Payment` is what the connector stated on the delivery, so it cannot be made up in a handler.
+//! A `Payment` is read from the connector's statement headers, so it cannot be built field by field.
 
 use blossom::payment::Payment;
 

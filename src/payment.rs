@@ -20,11 +20,13 @@ impl Payment {
         &self.payer
     }
 
+    /// The amount the connector states was paid.
     #[must_use]
     pub fn amount(&self) -> u128 {
         self.amount
     }
 
+    /// The chain the payment settles on (for example `evm:31337`).
     #[must_use]
     pub fn chain(&self) -> &str {
         &self.chain

@@ -30,11 +30,12 @@ pub struct App {
     pub write_url: String,
     pub public_url: String,
     pub client: Client,
+    // Fields drop in this order: the process is killed, then its container is removed, and only
+    // then is the storage it had open deleted.
     child: Child,
+    launch: Launch,
     // Only `restart_with` takes it, to hand it to the next app.
     storage: Option<tempfile::TempDir>,
-    // Declared after `child`, so the process is killed before its container is removed.
-    launch: Launch,
 }
 
 impl App {
@@ -95,7 +96,7 @@ impl App {
     /// The app on ephemeral ports over `storage`, with `settings`, not yet started: for the
     /// tests that watch it start (or fail to). Keep the `Launch` until the app is done with:
     /// dropping it removes the app's container.
-    pub fn command(storage: &Path, settings: &[&str]) -> Launch {
+    pub fn launch(storage: &Path, settings: &[&str]) -> Launch {
         let mut launch = Launch::new(storage);
         launch
             .args([
@@ -117,7 +118,7 @@ impl App {
         sweep_secs: u32,
         settings: &[&str],
     ) -> Self {
-        let mut launch = Self::command(storage.path(), settings);
+        let mut launch = Self::launch(storage.path(), settings);
         let mut child = launch
             .args(["--retention-secs", &retention_secs.to_string()])
             .args(["--sweep-interval-secs", &sweep_secs.to_string()])
@@ -140,6 +141,7 @@ impl App {
             launch,
         }
     }
+
     /// A `PUT /upload` on the write port with a correct payment statement and no authorization.
     pub fn upload(&self, body: &[u8]) -> RequestBuilder {
         self.client
@@ -162,7 +164,8 @@ impl Drop for App {
     }
 }
 
-/// Where a container finds `connector`, as the bundle's compose network would give it one.
+/// Where a container finds `connector`: any private address, as the bundle's compose network would
+/// give it one. Nothing listens there; the mirror guard must refuse before connecting.
 pub const CONNECTOR_ADDRESS: &str = "172.18.0.2";
 
 /// Containers this test process has started, so each gets its own name.

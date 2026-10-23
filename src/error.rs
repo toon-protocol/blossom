@@ -34,6 +34,10 @@ pub enum ApiError {
     StorageFull,
     #[error("this blob is not accepted on this server")]
     TakenDown,
+    #[error("the media route takes JPEG, PNG and WebP images only")]
+    NotAnImage,
+    #[error("R00: optimizing the image would not finish before the packet deadline")]
+    TooSlow,
     #[error("range not satisfiable")]
     RangeNotSatisfiable(u64),
     #[error("internal error")]
@@ -57,7 +61,8 @@ impl ApiError {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::LengthRequired => StatusCode::LENGTH_REQUIRED,
             Self::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::UnsupportedType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::UnsupportedType(_) | Self::NotAnImage => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::TooSlow => StatusCode::GATEWAY_TIMEOUT,
             Self::StorageFull => StatusCode::INSUFFICIENT_STORAGE,
             Self::RangeNotSatisfiable(_) => StatusCode::RANGE_NOT_SATISFIABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,

@@ -1,4 +1,4 @@
-//! The write port: `PUT /upload` and `PUT /mirror`, reached only through the connector.
+//! The write port: `PUT /upload`, `PUT /mirror` and `PUT /media`, reached only through the connector.
 
 use std::sync::PoisonError;
 
@@ -22,6 +22,7 @@ pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/upload", put(upload))
         .route("/mirror", put(crate::mirror::mirror))
+        .route("/media", put(crate::media::media))
         .with_state(state)
 }
 

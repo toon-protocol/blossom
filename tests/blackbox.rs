@@ -3,6 +3,7 @@
 mod common;
 
 use common::{App, OPEN_CAP, Signer, now, random_blob, sha256_hex, status};
+use image::ImageEncoder;
 use reqwest::blocking::Response;
 
 fn header(response: &Response, name: &str) -> String {
@@ -990,6 +991,38 @@ fn mirror(app: &App, signer: &Signer, expected: &[u8], url: &str) -> reqwest::bl
         .unwrap()
 }
 
+// ---- the media route (BUD-05)
+
+/// A JPEG of noise with an EXIF APP1 segment holding a GPS block, spliced in after the SOI marker.
+fn jpeg_with_gps() -> Vec<u8> {
+    let noise = random_blob(64 * 64 * 3);
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+        .encode(&noise, 64, 64, image::ExtendedColorType::Rgb8)
+        .unwrap();
+    let mut exif = b"Exif\0\0MM\0*\0\0\0\x08GPSLatitudeRef GPSLongitude 48.8584N 2.2945E".to_vec();
+    let length = u16::try_from(exif.len() + 2).unwrap().to_be_bytes();
+    let mut segment = vec![0xFF, 0xE1, length[0], length[1]];
+    segment.append(&mut exif);
+    jpeg.splice(2..2, segment);
+    jpeg
+}
+
+fn put_media(app: &App, signer: &Signer, body: &[u8]) -> Response {
+    app.client
+        .put(format!("{}/media", app.write_url))
+        .header("x-toon-payer", "0xchannelkey")
+        .header("x-toon-amount", "1010")
+        .header("x-toon-chain", "evm:31337")
+        .header(
+            "authorization",
+            signer.authorization("media", &sha256_hex(body), now() - 10, now() + 600),
+        )
+        .body(body.to_vec())
+        .send()
+        .unwrap()
+}
+
 fn mirror_app(source: &Source, extra: &[&str]) -> Option<App> {
     let mut settings = vec!["--mirror-allowed-origins", source.origin.as_str()];
     settings.extend_from_slice(extra);
@@ -1219,4 +1252,140 @@ fn a_malformed_mirror_allowed_origins_entry_stops_the_app_starting() {
     .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("TOON_MIRROR_ALLOWED_ORIGINS"));
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn an_image_with_exif_gps_comes_back_stripped_and_only_the_output_is_kept() {
+    let app = App::start();
+    let input = jpeg_with_gps();
+    assert!(contains(&input, b"Exif\0\0") && contains(&input, b"GPSLatitudeRef"));
+
+    let response = put_media(&app, &Signer::random(), &input);
+    assert_eq!(status(&response), 201);
+    assert!(sunset_secs(&response) > now());
+    let descriptor: serde_json::Value = response.json().unwrap();
+    let hash = descriptor["sha256"].as_str().unwrap();
+    assert_eq!(descriptor["type"], "image/jpeg");
+
+    let output = app.read(hash).send().unwrap().bytes().unwrap();
+    assert_eq!(sha256_hex(&output), hash);
+    assert_eq!(descriptor["size"], output.len());
+    assert!(!contains(&output, b"Exif") && !contains(&output, b"GPS"));
+    assert!(image::load_from_memory(&output).is_ok());
+
+    assert_eq!(status(&app.read(&sha256_hex(&input)).send().unwrap()), 404);
+}
+
+#[test]
+fn a_non_image_body_is_refused_on_the_media_route() {
+    let app = App::start();
+    let response = put_media(&app, &Signer::random(), b"just some text, not a picture");
+    assert_eq!(status(&response), 415);
+    let truncated = &jpeg_with_gps()[..40];
+    assert_eq!(status(&put_media(&app, &Signer::random(), truncated)), 415);
+}
+
+#[test]
+fn the_media_route_needs_the_payment_statement_and_a_media_authorization() {
+    let app = App::start();
+    let input = jpeg_with_gps();
+    let signer = Signer::random();
+    let unpaid = app
+        .client
+        .put(format!("{}/media", app.write_url))
+        .header(
+            "authorization",
+            signer.authorization("media", &sha256_hex(&input), now() - 10, now() + 600),
+        )
+        .body(input.clone())
+        .send()
+        .unwrap();
+    assert_eq!(status(&unpaid), 400);
+
+    let wrong_verb = app
+        .client
+        .put(format!("{}/media", app.write_url))
+        .header("x-toon-payer", "0xchannelkey")
+        .header("x-toon-amount", "1010")
+        .header("x-toon-chain", "evm:31337")
+        .header("authorization", signer.upload_authorization(&input))
+        .body(input)
+        .send()
+        .unwrap();
+    assert_eq!(status(&wrong_verb), 401);
+}
+
+#[test]
+fn the_media_route_is_refused_when_the_acceptance_check_would_refuse() {
+    let input = jpeg_with_gps();
+    if let Some(app) = App::start_with(&[
+        "--storage-cap-bytes",
+        "1000000000",
+        "--max-blob-bytes",
+        "100",
+    ]) {
+        assert_eq!(status(&put_media(&app, &Signer::random(), &input)), 413);
+    }
+    if let Some(app) = App::start_with(&[]) {
+        assert_eq!(status(&put_media(&app, &Signer::random(), &input)), 507);
+    }
+    if let Some(app) = App::start_with(&[
+        "--storage-cap-bytes",
+        "1000000000",
+        "--allowed-content-types",
+        "image/png",
+    ]) {
+        assert_eq!(status(&put_media(&app, &Signer::random(), &input)), 415);
+    }
+    if let Some(app) = App::start_with(&["--storage-cap-bytes", "1000000000"]) {
+        // Learn the output's hash, then restart with it on the takedown list.
+        let signer = Signer::random();
+        let output = put_media(&app, &signer, &input)
+            .json::<serde_json::Value>()
+            .unwrap()["sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let app = app
+            .restart_with(&[
+                "--storage-cap-bytes",
+                "1000000000",
+                "--blocked-blobs",
+                &output,
+            ])
+            .unwrap();
+        assert_eq!(status(&put_media(&app, &signer, &input)), 403);
+    }
+    if let Some(app) = App::start_with(&[
+        "--storage-cap-bytes",
+        "1000000000",
+        "--blocked-blobs",
+        &sha256_hex(&input),
+    ]) {
+        assert_eq!(status(&put_media(&app, &Signer::random(), &input)), 403);
+    }
+}
+
+#[test]
+fn optimizing_too_slow_for_the_packet_deadline_is_refused_with_r00() {
+    let Some(app) = App::start_with(&[
+        "--storage-cap-bytes",
+        "1000000000",
+        "--media-deadline-ms",
+        "1",
+    ]) else {
+        return;
+    };
+    let flat = vec![7u8; 3000 * 3000 * 3];
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(&flat, 3000, 3000, image::ExtendedColorType::Rgb8)
+        .unwrap();
+    let response = put_media(&app, &Signer::random(), &png);
+    assert_eq!(status(&response), 504);
+    assert!(header(&response, "x-reason").starts_with("R00"));
 }

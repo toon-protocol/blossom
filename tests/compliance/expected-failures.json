@@ -1,25 +1,5 @@
 [
   {
-    "bud": "BUD-05",
-    "case": "PUT /media",
-    "surface": "media"
-  },
-  {
-    "bud": "BUD-05",
-    "case": "PUT /media X-SHA-256",
-    "surface": "media"
-  },
-  {
-    "bud": "BUD-05",
-    "case": "HEAD /media",
-    "surface": "media"
-  },
-  {
-    "bud": "BUD-11",
-    "case": "PUT /media authorization: PUT /media with t=media succeeds",
-    "surface": "media"
-  },
-  {
     "bud": "BUD-01",
     "case": "HEAD /<sha256>: HEAD response body is empty",
     "surface": "unobservable"
@@ -47,6 +27,16 @@
   {
     "bud": "BUD-11",
     "case": "GET /list/<pubkey> authorization: GET /list without auth returns 401",
+    "surface": "optional"
+  },
+  {
+    "bud": "BUD-05",
+    "case": "HEAD /media: HEAD /media with all headers returns 200",
+    "surface": "optional"
+  },
+  {
+    "bud": "BUD-05",
+    "case": "HEAD /media: HEAD /media missing X-Content-Length returns 411",
     "surface": "optional"
   }
 ]

@@ -12,6 +12,9 @@ const ONE_HOUR_SECS: u64 = 60 * 60;
 /// Just under the connector's 2 MiB body cap (about 1.9 MiB).
 const DEFAULT_MAX_BLOB_BYTES: u64 = 1_992_294;
 
+/// Well inside the connector's packet deadline.
+const DEFAULT_MEDIA_DEADLINE_MS: u64 = 5_000;
+
 /// Settings: each is an environment variable and a matching flag.
 #[derive(Clone, Debug, Parser)]
 #[command(version, about = "The TOON Protocol blob app")]
@@ -71,6 +74,11 @@ pub struct Config {
     /// from then on.
     #[arg(long, env = "TOON_BLOCKED_BLOBS", value_delimiter = ',')]
     pub blocked_blobs: Option<Vec<String>>,
+
+    /// How long the media route may spend optimizing an image, in milliseconds. It must stay well
+    /// inside the connector's packet deadline: past it the request is refused with `R00`.
+    #[arg(long, env = "TOON_BLOB_MEDIA_DEADLINE_MS", default_value_t = DEFAULT_MEDIA_DEADLINE_MS)]
+    pub media_deadline_ms: u64,
 }
 
 impl Config {

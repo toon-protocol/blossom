@@ -12,6 +12,7 @@ pub mod descriptor;
 pub mod error;
 pub mod hash;
 pub mod holdings;
+pub mod media;
 pub mod mirror;
 pub mod payment;
 pub mod public;

@@ -1,55 +1,5 @@
 [
   {
-    "bud": "BUD-04",
-    "case": "Setup: upload blob for mirror tests",
-    "surface": "mirror"
-  },
-  {
-    "bud": "BUD-04",
-    "case": "PUT /mirror accepts URL",
-    "surface": "mirror"
-  },
-  {
-    "bud": "BUD-04",
-    "case": "Mirror returns Blob Descriptor",
-    "surface": "mirror"
-  },
-  {
-    "bud": "BUD-04",
-    "case": "New mirror returns 201 Created",
-    "surface": "mirror"
-  },
-  {
-    "bud": "BUD-04",
-    "case": "Existing mirror returns 200 OK",
-    "surface": "mirror"
-  },
-  {
-    "bud": "BUD-04",
-    "case": "Malformed request returns 400",
-    "surface": "mirror"
-  },
-  {
-    "bud": "BUD-04",
-    "case": "Missing url returns 400",
-    "surface": "mirror"
-  },
-  {
-    "bud": "BUD-04",
-    "case": "Unreachable URL returns 502",
-    "surface": "mirror"
-  },
-  {
-    "bud": "BUD-04",
-    "case": "Hash mismatch returns 409",
-    "surface": "mirror"
-  },
-  {
-    "bud": "BUD-11",
-    "case": "PUT /mirror authorization: PUT /mirror with t=upload auth succeeds",
-    "surface": "mirror"
-  },
-  {
     "bud": "BUD-01",
     "case": "HEAD /<sha256>: HEAD response body is empty",
     "surface": "unobservable"
@@ -73,11 +23,6 @@
     "bud": "BUD-02",
     "case": "Additional descriptor fields (optional): descriptor may have ipfs field",
     "surface": "optional"
-  },
-  {
-    "bud": "BUD-08",
-    "case": "Mirror returns nip94: mirror succeeds",
-    "surface": "mirror"
   },
   {
     "bud": "BUD-11",

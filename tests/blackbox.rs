@@ -922,6 +922,75 @@ fn the_takedown_list_is_logged_at_startup() {
     );
 }
 
+// The mirror route (BUD-04).
+
+/// A throwaway HTTP origin on loopback: `/blob` serves `body`, `/redirect?to=<url>` redirects.
+struct Source {
+    origin: String,
+}
+
+impl Source {
+    fn serve(body: Vec<u8>) -> Self {
+        Self::start(body, true)
+    }
+
+    /// A source that states no length, so only the streamed limit can stop it.
+    fn serve_unsized(body: Vec<u8>) -> Self {
+        Self::start(body, false)
+    }
+
+    fn start(body: Vec<u8>, sized: bool) -> Self {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let path = request.split_whitespace().nth(1).unwrap_or("/").to_owned();
+                let head = match path.strip_prefix("/redirect?to=") {
+                    Some(to) => format!(
+                        "HTTP/1.1 302 Found\r\nlocation: {to}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                    ),
+                    None if sized => format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    ),
+                    None => {
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\n"
+                            .to_owned()
+                    }
+                };
+                let _ = stream.write_all(head.as_bytes());
+                if !path.starts_with("/redirect") {
+                    let _ = stream.write_all(&body);
+                }
+            }
+        });
+        Self { origin }
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.origin)
+    }
+}
+
+fn mirror(app: &App, signer: &Signer, expected: &[u8], url: &str) -> reqwest::blocking::Response {
+    app.client
+        .put(format!("{}/mirror", app.write_url))
+        .header("x-toon-payer", "0xchannelkey")
+        .header("x-toon-amount", "25000")
+        .header("x-toon-chain", "evm:31337")
+        .header(
+            "authorization",
+            signer.authorization("upload", &sha256_hex(expected), now() - 10, now() + 600),
+        )
+        .json(&serde_json::json!({ "url": url }))
+        .send()
+        .unwrap()
+}
+
 // ---- the media route (BUD-05)
 
 /// A JPEG of noise with an EXIF APP1 segment holding a GPS block, spliced in after the SOI marker.
@@ -952,6 +1021,237 @@ fn put_media(app: &App, signer: &Signer, body: &[u8]) -> Response {
         .body(body.to_vec())
         .send()
         .unwrap()
+}
+
+fn mirror_app(source: &Source, extra: &[&str]) -> Option<App> {
+    let mut settings = vec!["--mirror-allowed-origins", source.origin.as_str()];
+    settings.extend_from_slice(extra);
+    App::start_with(&settings)
+}
+
+#[test]
+fn a_mirror_from_an_allowed_origin_keeps_the_blob_and_returns_a_descriptor_with_sunset() {
+    let body = random_blob(3000);
+    let source = Source::serve(body.clone());
+    let Some(app) = mirror_app(&source, &OPEN_CAP) else {
+        return;
+    };
+    let signer = Signer::random();
+    let response = mirror(&app, &signer, &body, &source.url("/blob"));
+    assert_eq!(status(&response), 201);
+    let sunset = sunset_secs(&response);
+    assert!(sunset > now());
+    let descriptor: serde_json::Value = response.json().unwrap();
+    assert_eq!(descriptor["sha256"], sha256_hex(&body));
+    assert_eq!(descriptor["size"], 3000);
+    assert_eq!(descriptor["type"], "text/plain");
+
+    let read = app.read(&sha256_hex(&body)).send().unwrap();
+    assert_eq!(status(&read), 200);
+    assert_eq!(read.bytes().unwrap().as_ref(), body.as_slice());
+    assert_eq!(listed(&app, &signer.pubkey()).len(), 1);
+
+    let again = mirror(&app, &signer, &body, &source.url("/blob"));
+    assert_eq!(
+        status(&again),
+        200,
+        "mirroring a held blob extends the holding"
+    );
+    assert!(sunset_secs(&again) >= sunset);
+}
+
+#[test]
+fn a_mirror_the_guard_refuses_is_refused() {
+    let body = random_blob(100);
+    // No allowed origins: nothing is exempt.
+    let Some(app) = App::start_with(&OPEN_CAP) else {
+        return;
+    };
+    let signer = Signer::random();
+    for url in [
+        "https://127.0.0.1:9/blob",
+        "https://localhost/blob",
+        "https://[::1]/blob",
+        "https://10.0.0.1/blob",
+        "https://172.16.0.1/blob",
+        "https://192.168.1.1/blob",
+        "https://169.254.169.254/latest",
+        "https://[fe80::1]/blob",
+        "https://[fd00::1]/blob",
+        "https://0.0.0.0/blob",
+        "http://example.com/blob",
+        "ftp://example.com/blob",
+    ] {
+        let response = mirror(&app, &signer, &body, url);
+        assert_eq!(status(&response), 400, "{url}");
+        assert!(response.text().unwrap().contains("mirror refused"), "{url}");
+    }
+    assert!(listed(&app, &signer.pubkey()).is_empty());
+}
+
+#[test]
+fn a_mirror_that_redirects_to_a_refused_address_is_refused() {
+    let body = random_blob(100);
+    let front = Source::serve(Vec::new());
+    // Only `front` is exempt: its redirect to an `https` loopback URL meets the address check.
+    let Some(app) = mirror_app(&front, &OPEN_CAP) else {
+        return;
+    };
+    let signer = Signer::random();
+    let response = mirror(
+        &app,
+        &signer,
+        &body,
+        &front.url("/redirect?to=https://127.0.0.1:9/blob"),
+    );
+    assert_eq!(status(&response), 400);
+    assert!(
+        response
+            .text()
+            .unwrap()
+            .contains("which is not a public address")
+    );
+    assert_eq!(status(&app.read(&sha256_hex(&body)).send().unwrap()), 404);
+}
+
+#[test]
+fn a_mirror_follows_a_redirect_between_allowed_origins() {
+    let body = random_blob(100);
+    let target = Source::serve(body.clone());
+    let front = Source::serve(Vec::new());
+    let allowed = format!("{},{}", front.origin, target.origin);
+    let Some(app) = App::start_with(&[
+        OPEN_CAP[0],
+        OPEN_CAP[1],
+        "--mirror-allowed-origins",
+        &allowed,
+    ]) else {
+        return;
+    };
+    let response = mirror(
+        &app,
+        &Signer::random(),
+        &body,
+        &front.url(&format!("/redirect?to={}", target.url("/blob"))),
+    );
+    assert_eq!(status(&response), 201);
+}
+
+#[test]
+fn a_source_over_the_mirror_size_limit_is_refused() {
+    let body = random_blob(5000);
+    let source = Source::serve(body.clone());
+    let Some(app) = mirror_app(
+        &source,
+        &[OPEN_CAP[0], OPEN_CAP[1], "--mirror-max-bytes", "4000"],
+    ) else {
+        return;
+    };
+    let response = mirror(&app, &Signer::random(), &body, &source.url("/blob"));
+    assert_eq!(status(&response), 413);
+    assert_eq!(status(&app.read(&sha256_hex(&body)).send().unwrap()), 404);
+}
+
+#[test]
+fn a_source_that_states_no_length_is_cut_off_at_the_mirror_size_limit() {
+    let body = random_blob(5000);
+    let source = Source::serve_unsized(body.clone());
+    let Some(app) = mirror_app(
+        &source,
+        &[OPEN_CAP[0], OPEN_CAP[1], "--mirror-max-bytes", "4000"],
+    ) else {
+        return;
+    };
+    let response = mirror(&app, &Signer::random(), &body, &source.url("/blob"));
+    assert_eq!(status(&response), 413);
+    assert_eq!(status(&app.read(&sha256_hex(&body)).send().unwrap()), 404);
+}
+
+#[test]
+fn fetched_bytes_that_do_not_hash_to_x_are_refused_and_not_kept() {
+    let served = random_blob(100);
+    let source = Source::serve(served.clone());
+    let Some(app) = mirror_app(&source, &OPEN_CAP) else {
+        return;
+    };
+    let signer = Signer::random();
+    let response = mirror(&app, &signer, b"something else", &source.url("/blob"));
+    assert_eq!(status(&response), 409);
+    assert_eq!(status(&app.read(&sha256_hex(&served)).send().unwrap()), 404);
+    assert!(listed(&app, &signer.pubkey()).is_empty());
+}
+
+#[test]
+fn a_mirror_meets_the_same_acceptance_check_as_an_upload() {
+    let body = random_blob(300);
+    let hash = sha256_hex(&body);
+    let source = Source::serve(body.clone());
+    let signer = Signer::random();
+    let refused = |extra: &[&str], expected: u16| {
+        let Some(app) = mirror_app(&source, extra) else {
+            return;
+        };
+        let response = mirror(&app, &signer, &body, &source.url("/blob"));
+        assert_eq!(status(&response), expected, "{extra:?}");
+        assert_eq!(status(&app.read(&hash).send().unwrap()), 404, "{extra:?}");
+    };
+    refused(&["--storage-cap-bytes", "100"], 507);
+    refused(&[], 507);
+    refused(
+        &[
+            OPEN_CAP[0],
+            OPEN_CAP[1],
+            "--allowed-content-types",
+            "image/png",
+        ],
+        415,
+    );
+    refused(&[OPEN_CAP[0], OPEN_CAP[1], "--blocked-blobs", &hash], 403);
+}
+
+#[test]
+fn a_mirror_without_the_payment_statement_or_a_url_is_refused() {
+    let body = random_blob(100);
+    let source = Source::serve(body.clone());
+    let Some(app) = mirror_app(&source, &OPEN_CAP) else {
+        return;
+    };
+    let signer = Signer::random();
+    let authorization = signer.upload_authorization(&body);
+    let unpaid = app
+        .client
+        .put(format!("{}/mirror", app.write_url))
+        .header("authorization", &authorization)
+        .json(&serde_json::json!({ "url": source.url("/blob") }))
+        .send()
+        .unwrap();
+    assert_eq!(status(&unpaid), 400);
+    assert_eq!(status(&app.read(&sha256_hex(&body)).send().unwrap()), 404);
+
+    let no_url = app
+        .client
+        .put(format!("{}/mirror", app.write_url))
+        .header("x-toon-payer", "0xchannelkey")
+        .header("x-toon-amount", "25000")
+        .header("x-toon-chain", "evm:31337")
+        .header("authorization", &authorization)
+        .json(&serde_json::json!({}))
+        .send()
+        .unwrap();
+    assert_eq!(status(&no_url), 400);
+}
+
+#[test]
+fn a_malformed_mirror_allowed_origins_entry_stops_the_app_starting() {
+    let storage = tempfile::tempdir().unwrap();
+    let output = App::command(
+        storage.path(),
+        &["--mirror-allowed-origins", "not an origin"],
+    )
+    .output()
+    .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("TOON_MIRROR_ALLOWED_ORIGINS"));
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {

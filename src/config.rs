@@ -58,6 +58,17 @@ pub struct Config {
     #[arg(long, env = "TOON_BLOB_ALLOWED_CONTENT_TYPES", value_delimiter = ',')]
     pub allowed_content_types: Option<Vec<String>>,
 
+    /// The largest source one paid mirror may fetch, in bytes: a fetch is cut off past it. Over it
+    /// is `413`.
+    #[arg(long, env = "TOON_MIRROR_MAX_BYTES", default_value_t = DEFAULT_MAX_BLOB_BYTES)]
+    pub mirror_max_bytes: u64,
+
+    /// Comma-separated origins (`scheme://host[:port]`) a mirror may fetch from without the
+    /// mirror guard: no `https` requirement, and any address. Empty by default. An entry that is
+    /// not an origin fails startup.
+    #[arg(long, env = "TOON_MIRROR_ALLOWED_ORIGINS", value_delimiter = ',')]
+    pub mirror_allowed_origins: Option<Vec<String>>,
+
     /// Comma-separated sha256 hashes to take down: read at startup, an entry that is not a hash
     /// fails startup. Every holding on a listed blob ends and its bytes go; the hash is refused
     /// from then on.
@@ -92,6 +103,29 @@ impl Config {
             taken_down.insert(hash);
         }
         Ok(taken_down)
+    }
+
+    /// The origins exempt from the mirror guard, normalized. An empty setting lists nothing.
+    ///
+    /// # Errors
+    /// Names the first entry that is not an `http` or `https` origin.
+    pub fn mirror_origins(&self) -> Result<HashSet<String>, String> {
+        let mut origins = HashSet::new();
+        for entry in self.mirror_allowed_origins.iter().flatten() {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                continue;
+            }
+            let origin = reqwest::Url::parse(entry)
+                .ok()
+                .filter(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some())
+                .map(|u| u.origin().ascii_serialization())
+                .ok_or_else(|| {
+                    format!("TOON_MIRROR_ALLOWED_ORIGINS: {entry:?} is not an http(s) origin")
+                })?;
+            origins.insert(origin);
+        }
+        Ok(origins)
     }
 
     /// This server's lowercase domain name, from the public URL: no scheme, port or path.

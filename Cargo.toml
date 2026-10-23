@@ -21,6 +21,7 @@ clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
 http-body-util = "0.1"
 httpdate = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 k256 = { version = "0.13", features = ["schnorr"] }
 mime_guess = "2"
 rusqlite = { version = "0.37", features = ["bundled"] }

@@ -1,4 +1,4 @@
-//! The write port: `PUT /upload`, reached only through the connector.
+//! The write port: `PUT /upload` and `PUT /media`, reached only through the connector.
 
 use std::sync::PoisonError;
 
@@ -20,6 +20,7 @@ use axum::{Json, Router};
 pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/upload", put(upload))
+        .route("/media", put(crate::media::media))
         .with_state(state)
 }
 

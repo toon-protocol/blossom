@@ -27,8 +27,10 @@ Reached only through the connector. Devnet prices are in the settlement asset's 
 | `g.toon.blossom.media` | `PUT /media`, images only | `{ base = 1000, per_kib = 10 }` of input | 05 |
 
 Media optimization strips metadata and re-encodes, and keeps only the output. The original is
-never stored. Mirror fetches only public `https` addresses, checked on the resolved address and on
-every redirect, so it can never reach a service on the bundle's internal network.
+never stored. Optimizing must finish within `TOON_BLOB_MEDIA_DEADLINE_MS` (default 5 seconds,
+well inside the connector's packet deadline); slower work is refused `504` with an `R00` reason.
+Mirror fetches only public `https` addresses, checked on the resolved address and on every redirect,
+so it can never reach a service on the bundle's internal network.
 
 ### Free, on the public host
 

@@ -481,9 +481,7 @@ fn read_status(app: &App, hash: &str) -> (u16, u16) {
 
 #[test]
 fn a_blob_is_404_after_its_last_holding_expires_and_stays_readable_while_another_is_live() {
-    let Some(app) = App::start_short(6, 1) else {
-        return;
-    };
+    let app = App::start_short(6, 1);
     let (early, late) = (Signer::random(), Signer::random());
     let body = random_blob(200);
     let hash = sha256_hex(&body);
@@ -506,9 +504,7 @@ fn a_blob_is_404_after_its_last_holding_expires_and_stays_readable_while_another
 
 #[test]
 fn an_expired_and_swept_blob_can_be_uploaded_again_afresh() {
-    let Some(app) = App::start_short(2, 1) else {
-        return;
-    };
+    let app = App::start_short(2, 1);
     let signer = Signer::random();
     let body = random_blob(100);
     let hash = sha256_hex(&body);
@@ -577,20 +573,14 @@ fn both_agree(app: &App, body: &[u8], content_type: &str) -> u16 {
 
 #[test]
 fn with_no_storage_cap_set_the_preflight_and_the_upload_both_refuse() {
-    let Some(app) = App::start_with(&[]) else {
-        return;
-    };
+    let app = App::start_with(&[]);
     let body = random_blob(100);
     assert_eq!(both_agree(&app, &body, "text/plain"), 507);
 }
 
 #[test]
 fn a_blob_over_the_size_limit_gets_413_from_the_preflight_and_the_upload() {
-    let Some(app) =
-        App::start_with(&["--storage-cap-bytes", "1000000", "--max-blob-bytes", "1000"])
-    else {
-        return;
-    };
+    let app = App::start_with(&["--storage-cap-bytes", "1000000", "--max-blob-bytes", "1000"]);
     assert_eq!(both_agree(&app, &random_blob(1001), "text/plain"), 413);
     assert_eq!(both_agree(&app, &random_blob(1000), "text/plain"), 200);
 }
@@ -614,14 +604,12 @@ fn the_default_size_limit_is_just_under_the_connectors_2_mib_cap() {
 
 #[test]
 fn a_type_outside_the_allowlist_is_refused_by_both_and_a_listed_type_is_accepted_by_both() {
-    let Some(app) = App::start_with(&[
+    let app = App::start_with(&[
         "--storage-cap-bytes",
         "1000000",
         "--allowed-content-types",
         "image/png,text/plain",
-    ]) else {
-        return;
-    };
+    ]);
     assert_eq!(both_agree(&app, &random_blob(50), "application/zip"), 415);
     assert_eq!(both_agree(&app, &random_blob(50), "image/png"), 200);
     assert_eq!(
@@ -632,9 +620,7 @@ fn a_type_outside_the_allowlist_is_refused_by_both_and_a_listed_type_is_accepted
 
 #[test]
 fn once_the_storage_cap_would_be_exceeded_both_refuse() {
-    let Some(app) = App::start_with(&["--storage-cap-bytes", "250"]) else {
-        return;
-    };
+    let app = App::start_with(&["--storage-cap-bytes", "250"]);
     let first = random_blob(200);
     assert_eq!(both_agree(&app, &first, "text/plain"), 200);
     assert_eq!(both_agree(&app, &random_blob(100), "text/plain"), 507);
@@ -707,9 +693,7 @@ fn an_owners_delete_ends_their_holding_and_the_blob_is_404() {
 
 #[test]
 fn with_two_owners_one_delete_leaves_the_blob_readable_with_the_remaining_sunset() {
-    let Some(app) = App::start_short(6, 1) else {
-        return;
-    };
+    let app = App::start_short(6, 1);
     let (first, second) = (Signer::random(), Signer::random());
     let body = random_blob(300);
     let hash = sha256_hex(&body);
@@ -755,9 +739,7 @@ fn a_delete_by_a_non_owner_or_without_a_valid_authorization_changes_nothing() {
 
 #[test]
 fn list_returns_exactly_the_pubkeys_live_blobs_and_drops_deleted_and_expired_ones() {
-    let Some(app) = App::start_short(4, 1) else {
-        return;
-    };
+    let app = App::start_short(4, 1);
     let (owner, other) = (Signer::random(), Signer::random());
     let (kept, deleted, expiring, others) = (
         random_blob(100),
@@ -830,9 +812,7 @@ fn a_delete_of_a_blob_no_one_holds_is_404() {
 
 #[test]
 fn a_listed_blob_is_404_and_gone_from_every_owners_list_after_a_restart() {
-    let Some(app) = App::start_with(&OPEN_CAP) else {
-        return;
-    };
+    let app = App::start_with(&OPEN_CAP);
     let (a, b) = (Signer::random(), Signer::random());
     let (taken, kept) = (random_blob(100), random_blob(110));
     put_blob(&app, &a, &taken, "text/plain");
@@ -842,9 +822,7 @@ fn a_listed_blob_is_404_and_gone_from_every_owners_list_after_a_restart() {
     assert_eq!(read_status(&app, &hash).0, 200);
 
     let blocked = format!("{},{}", sha256_hex(b"unseen"), hash.to_uppercase());
-    let app = app
-        .restart_with(&[OPEN_CAP[0], OPEN_CAP[1], "--blocked-blobs", &blocked])
-        .unwrap();
+    let app = app.restart_with(&[OPEN_CAP[0], OPEN_CAP[1], "--blocked-blobs", &blocked]);
     assert_eq!(read_status(&app, &hash), (404, 404));
     for owner in [&a, &b] {
         assert!(
@@ -861,9 +839,7 @@ fn a_listed_blob_is_404_and_gone_from_every_owners_list_after_a_restart() {
 fn the_preflight_and_the_paid_upload_refuse_a_listed_hash() {
     let blob = random_blob(100);
     let hash = sha256_hex(&blob);
-    let Some(app) = App::start_with(&[OPEN_CAP[0], OPEN_CAP[1], "--blocked-blobs", &hash]) else {
-        return;
-    };
+    let app = App::start_with(&[OPEN_CAP[0], OPEN_CAP[1], "--blocked-blobs", &hash]);
     let preflight = app
         .preflight(blob.len(), "text/plain", Some(&hash))
         .send()
@@ -900,7 +876,8 @@ fn a_malformed_blocked_blobs_entry_stops_the_app_starting() {
 fn the_takedown_list_is_logged_at_startup() {
     let hash = sha256_hex(b"listed");
     let storage = tempfile::tempdir().unwrap();
-    let mut child = App::command(storage.path(), &["--blocked-blobs", &hash])
+    let mut launch = App::command(storage.path(), &["--blocked-blobs", &hash]);
+    let mut child = launch
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -913,7 +890,8 @@ fn the_takedown_list_is_logged_at_startup() {
             .find(|line| line.contains("in force") && line.contains(&hash));
         let _ = found.send(line);
     });
-    let logged = logged.recv_timeout(std::time::Duration::from_secs(10));
+    // A ceiling, not a wait: a container can take several seconds to start on a busy daemon.
+    let logged = logged.recv_timeout(std::time::Duration::from_secs(60));
     let _ = child.kill();
     let _ = child.wait();
     assert!(
@@ -1023,7 +1001,7 @@ fn put_media(app: &App, signer: &Signer, body: &[u8]) -> Response {
         .unwrap()
 }
 
-fn mirror_app(source: &Source, extra: &[&str]) -> Option<App> {
+fn mirror_app(source: &Source, extra: &[&str]) -> App {
     let mut settings = vec!["--mirror-allowed-origins", source.origin.as_str()];
     settings.extend_from_slice(extra);
     App::start_with(&settings)
@@ -1033,9 +1011,7 @@ fn mirror_app(source: &Source, extra: &[&str]) -> Option<App> {
 fn a_mirror_from_an_allowed_origin_keeps_the_blob_and_returns_a_descriptor_with_sunset() {
     let body = random_blob(3000);
     let source = Source::serve(body.clone());
-    let Some(app) = mirror_app(&source, &OPEN_CAP) else {
-        return;
-    };
+    let app = mirror_app(&source, &OPEN_CAP);
     let signer = Signer::random();
     let response = mirror(&app, &signer, &body, &source.url("/blob"));
     assert_eq!(status(&response), 201);
@@ -1064,9 +1040,7 @@ fn a_mirror_from_an_allowed_origin_keeps_the_blob_and_returns_a_descriptor_with_
 fn a_mirror_the_guard_refuses_is_refused() {
     let body = random_blob(100);
     // No allowed origins: nothing is exempt.
-    let Some(app) = App::start_with(&OPEN_CAP) else {
-        return;
-    };
+    let app = App::start_with(&OPEN_CAP);
     let signer = Signer::random();
     for url in [
         "https://127.0.0.1:9/blob",
@@ -1094,9 +1068,7 @@ fn a_mirror_that_redirects_to_a_refused_address_is_refused() {
     let body = random_blob(100);
     let front = Source::serve(Vec::new());
     // Only `front` is exempt: its redirect to an `https` loopback URL meets the address check.
-    let Some(app) = mirror_app(&front, &OPEN_CAP) else {
-        return;
-    };
+    let app = mirror_app(&front, &OPEN_CAP);
     let signer = Signer::random();
     let response = mirror(
         &app,
@@ -1120,14 +1092,12 @@ fn a_mirror_follows_a_redirect_between_allowed_origins() {
     let target = Source::serve(body.clone());
     let front = Source::serve(Vec::new());
     let allowed = format!("{},{}", front.origin, target.origin);
-    let Some(app) = App::start_with(&[
+    let app = App::start_with(&[
         OPEN_CAP[0],
         OPEN_CAP[1],
         "--mirror-allowed-origins",
         &allowed,
-    ]) else {
-        return;
-    };
+    ]);
     let response = mirror(
         &app,
         &Signer::random(),
@@ -1141,12 +1111,10 @@ fn a_mirror_follows_a_redirect_between_allowed_origins() {
 fn a_source_over_the_mirror_size_limit_is_refused() {
     let body = random_blob(5000);
     let source = Source::serve(body.clone());
-    let Some(app) = mirror_app(
+    let app = mirror_app(
         &source,
         &[OPEN_CAP[0], OPEN_CAP[1], "--mirror-max-bytes", "4000"],
-    ) else {
-        return;
-    };
+    );
     let response = mirror(&app, &Signer::random(), &body, &source.url("/blob"));
     assert_eq!(status(&response), 413);
     assert_eq!(status(&app.read(&sha256_hex(&body)).send().unwrap()), 404);
@@ -1156,12 +1124,10 @@ fn a_source_over_the_mirror_size_limit_is_refused() {
 fn a_source_that_states_no_length_is_cut_off_at_the_mirror_size_limit() {
     let body = random_blob(5000);
     let source = Source::serve_unsized(body.clone());
-    let Some(app) = mirror_app(
+    let app = mirror_app(
         &source,
         &[OPEN_CAP[0], OPEN_CAP[1], "--mirror-max-bytes", "4000"],
-    ) else {
-        return;
-    };
+    );
     let response = mirror(&app, &Signer::random(), &body, &source.url("/blob"));
     assert_eq!(status(&response), 413);
     assert_eq!(status(&app.read(&sha256_hex(&body)).send().unwrap()), 404);
@@ -1171,9 +1137,7 @@ fn a_source_that_states_no_length_is_cut_off_at_the_mirror_size_limit() {
 fn fetched_bytes_that_do_not_hash_to_x_are_refused_and_not_kept() {
     let served = random_blob(100);
     let source = Source::serve(served.clone());
-    let Some(app) = mirror_app(&source, &OPEN_CAP) else {
-        return;
-    };
+    let app = mirror_app(&source, &OPEN_CAP);
     let signer = Signer::random();
     let response = mirror(&app, &signer, b"something else", &source.url("/blob"));
     assert_eq!(status(&response), 409);
@@ -1188,9 +1152,7 @@ fn a_mirror_meets_the_same_acceptance_check_as_an_upload() {
     let source = Source::serve(body.clone());
     let signer = Signer::random();
     let refused = |extra: &[&str], expected: u16| {
-        let Some(app) = mirror_app(&source, extra) else {
-            return;
-        };
+        let app = mirror_app(&source, extra);
         let response = mirror(&app, &signer, &body, &source.url("/blob"));
         assert_eq!(status(&response), expected, "{extra:?}");
         assert_eq!(status(&app.read(&hash).send().unwrap()), 404, "{extra:?}");
@@ -1213,9 +1175,7 @@ fn a_mirror_meets_the_same_acceptance_check_as_an_upload() {
 fn a_mirror_without_the_payment_statement_or_a_url_is_refused() {
     let body = random_blob(100);
     let source = Source::serve(body.clone());
-    let Some(app) = mirror_app(&source, &OPEN_CAP) else {
-        return;
-    };
+    let app = mirror_app(&source, &OPEN_CAP);
     let signer = Signer::random();
     let authorization = signer.upload_authorization(&body);
     let unpaid = app
@@ -1322,26 +1282,30 @@ fn the_media_route_needs_the_payment_statement_and_a_media_authorization() {
 #[test]
 fn the_media_route_is_refused_when_the_acceptance_check_would_refuse() {
     let input = jpeg_with_gps();
-    if let Some(app) = App::start_with(&[
-        "--storage-cap-bytes",
-        "1000000000",
-        "--max-blob-bytes",
-        "100",
-    ]) {
+    {
+        let app = App::start_with(&[
+            "--storage-cap-bytes",
+            "1000000000",
+            "--max-blob-bytes",
+            "100",
+        ]);
         assert_eq!(status(&put_media(&app, &Signer::random(), &input)), 413);
     }
-    if let Some(app) = App::start_with(&[]) {
+    {
+        let app = App::start_with(&[]);
         assert_eq!(status(&put_media(&app, &Signer::random(), &input)), 507);
     }
-    if let Some(app) = App::start_with(&[
-        "--storage-cap-bytes",
-        "1000000000",
-        "--allowed-content-types",
-        "image/png",
-    ]) {
+    {
+        let app = App::start_with(&[
+            "--storage-cap-bytes",
+            "1000000000",
+            "--allowed-content-types",
+            "image/png",
+        ]);
         assert_eq!(status(&put_media(&app, &Signer::random(), &input)), 415);
     }
-    if let Some(app) = App::start_with(&["--storage-cap-bytes", "1000000000"]) {
+    {
+        let app = App::start_with(&["--storage-cap-bytes", "1000000000"]);
         // Learn the output's hash, then restart with it on the takedown list.
         let signer = Signer::random();
         let output = put_media(&app, &signer, &input)
@@ -1350,36 +1314,33 @@ fn the_media_route_is_refused_when_the_acceptance_check_would_refuse() {
             .as_str()
             .unwrap()
             .to_owned();
-        let app = app
-            .restart_with(&[
-                "--storage-cap-bytes",
-                "1000000000",
-                "--blocked-blobs",
-                &output,
-            ])
-            .unwrap();
+        let app = app.restart_with(&[
+            "--storage-cap-bytes",
+            "1000000000",
+            "--blocked-blobs",
+            &output,
+        ]);
         assert_eq!(status(&put_media(&app, &signer, &input)), 403);
     }
-    if let Some(app) = App::start_with(&[
-        "--storage-cap-bytes",
-        "1000000000",
-        "--blocked-blobs",
-        &sha256_hex(&input),
-    ]) {
+    {
+        let app = App::start_with(&[
+            "--storage-cap-bytes",
+            "1000000000",
+            "--blocked-blobs",
+            &sha256_hex(&input),
+        ]);
         assert_eq!(status(&put_media(&app, &Signer::random(), &input)), 403);
     }
 }
 
 #[test]
 fn optimizing_too_slow_for_the_packet_deadline_is_refused_with_r00() {
-    let Some(app) = App::start_with(&[
+    let app = App::start_with(&[
         "--storage-cap-bytes",
         "1000000000",
         "--media-deadline-ms",
         "1",
-    ]) else {
-        return;
-    };
+    ]);
     let flat = vec![7u8; 3000 * 3000 * 3];
     let mut png = Vec::new();
     image::codecs::png::PngEncoder::new(&mut png)

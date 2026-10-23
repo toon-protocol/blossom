@@ -878,10 +878,14 @@ fn the_takedown_list_is_logged_at_startup() {
     let storage = tempfile::tempdir().unwrap();
     let mut launch = App::launch(storage.path(), &["--blocked-blobs", &hash]);
     let mut child = launch
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
+    // Wait, as every other test does, for the app to say it is listening: a container can sit
+    // queued on a busy daemon for a long time first. The takedown list is logged just after.
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    std::io::BufRead::read_line(&mut stdout, &mut String::new()).unwrap();
     let stderr = std::io::BufReader::new(child.stderr.take().unwrap());
     let (found, logged) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -890,8 +894,7 @@ fn the_takedown_list_is_logged_at_startup() {
             .find(|line| line.contains("in force") && line.contains(&hash));
         let _ = found.send(line);
     });
-    // A ceiling, not a wait: a container can take several seconds to start on a busy daemon.
-    let logged = logged.recv_timeout(std::time::Duration::from_secs(60));
+    let logged = logged.recv_timeout(std::time::Duration::from_secs(10));
     let _ = child.kill();
     let _ = child.wait();
     assert!(

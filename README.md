@@ -111,6 +111,14 @@ Two modes, the same as the store's:
 
 `tests/deploy_guard.rs` checks these files.
 
+On the devnet host the blob app runs in shared-edge mode from a checkout at `/root/blossom`, behind
+the relay's connector (the devnet's one connector, which carries the three routes) and the edge
+at `blossom.devnet.toonprotocol.dev`, which fronts the public port. `deploy/.env` there sets
+`DOMAIN`, `STORAGE_CAP_BYTES` and `COMPOSE_FILE=docker-compose.yml:docker-compose.shared-edge.yml`.
+`deploy/auto-apply.sh`, run every 5 minutes by `toon-auto-apply-blossom.timer`, fast-forwards to
+`main`, pulls and runs `up -d`, then checks that the app accepts connections on its public port. A
+merge here is live within one tick; a new `:release` image alone is picked up on the next merge.
+
 The blob app runs unchanged in either mode.
 
 ## Build and release

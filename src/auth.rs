@@ -2,26 +2,12 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use k256::schnorr::signature::hazmat::PrehashVerifier;
-use k256::schnorr::{Signature, VerifyingKey};
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
+use nostr::event::{Event, Tag};
 
 use crate::error::ApiError;
 use crate::hash::BlobHash;
 
-const AUTH_KIND: u64 = 24242;
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct Event {
-    pub id: String,
-    pub pubkey: String,
-    pub created_at: u64,
-    pub kind: u64,
-    pub tags: Vec<Vec<String>>,
-    pub content: String,
-    pub sig: String,
-}
+const AUTH_KIND: u16 = 24242;
 
 /// A verified authorization: who signed it, and which blob hashes it covers.
 #[derive(Debug)]
@@ -72,18 +58,19 @@ impl Authorization {
             .decode(encoded)
             .or_else(|_| URL_SAFE_NO_PAD.decode(encoded.trim_end_matches('=')))
             .map_err(|_| denied("not base64"))?;
-        let event: Event = serde_json::from_slice(&json).map_err(|_| denied("not an event"))?;
+        let event = Event::from_json(&json).map_err(|_| denied("not an event"))?;
 
-        if event.kind != AUTH_KIND {
+        if event.kind.as_u16() != AUTH_KIND {
             return Err(denied("kind must be 24242"));
         }
-        if event.created_at > now {
+        if event.created_at.as_secs() > now {
             return Err(denied("created_at is in the future"));
         }
         let tag = |name: &'static str| {
             event
                 .tags
                 .iter()
+                .map(Tag::as_slice)
                 .filter(move |t| t.first().map(String::as_str) == Some(name))
         };
         let expiration = tag("expiration")
@@ -105,50 +92,26 @@ impl Authorization {
         if hashes.is_empty() {
             return Err(denied("no x tag with a sha256 hash"));
         }
-        verify_signature(&event).map_err(denied)?;
+        event
+            .verify()
+            .map_err(|_| denied("the event's id or signature is wrong"))?;
         Ok(Self {
-            owner: event.pubkey.to_ascii_lowercase(),
+            owner: event.pubkey.to_hex(),
             hashes,
         })
     }
 }
 
-/// Checks that the event's id is the hash of its content and that its signature verifies.
-pub(crate) fn verify_signature(event: &Event) -> Result<(), &'static str> {
-    let serialized = serde_json::to_string(&(
-        0,
-        &event.pubkey,
-        event.created_at,
-        event.kind,
-        &event.tags,
-        &event.content,
-    ))
-    .map_err(|_| "unserializable event")?;
-    let id = Sha256::digest(serialized.as_bytes());
-    if hex::decode(&event.id).ok().as_deref() != Some(&id[..]) {
-        return Err("event id does not match its content");
-    }
-    let key = hex::decode(&event.pubkey)
-        .ok()
-        .and_then(|b| VerifyingKey::from_bytes(&b).ok())
-        .ok_or("bad pubkey")?;
-    let sig = hex::decode(&event.sig)
-        .ok()
-        .and_then(|b| Signature::try_from(b.as_slice()).ok())
-        .ok_or("bad signature encoding")?;
-    key.verify_prehash(&id, &sig)
-        .map_err(|_| "signature does not verify")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k256::schnorr::SigningKey;
     use k256::schnorr::signature::hazmat::PrehashSigner;
+    use k256::schnorr::{Signature, SigningKey};
+    use sha2::{Digest, Sha256};
 
     const NOW: u64 = 1_000_000;
 
-    fn header(kind: u64, tags: &[[&str; 2]], created_at: u64, tamper: bool) -> String {
+    fn header(kind: u16, tags: &[[&str; 2]], created_at: u64, tamper: bool) -> String {
         let key = SigningKey::from_bytes(&[7u8; 32]).unwrap();
         let pubkey = hex::encode(key.verifying_key().to_bytes());
         let tags: Vec<Vec<String>> = tags

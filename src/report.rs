@@ -4,12 +4,13 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::StatusCode;
 
-use crate::auth::{Event, verify_signature};
+use nostr::event::{Event, Tag};
+
 use crate::error::{ApiError, read_body};
 use crate::hash::BlobHash;
 use crate::state::{SharedState, now};
 
-const REPORT_KIND: u64 = 1984;
+const REPORT_KIND: u16 = 1984;
 const MAX_REPORT_BYTES: usize = 64 * 1024;
 
 /// A verified report: who made it, which blobs it names and why.
@@ -32,12 +33,12 @@ impl Report {
     /// by an `x` tag with a sha256 hash, or its id or signature does not verify.
     pub fn parse(body: &[u8]) -> Result<Self, ApiError> {
         let refuse = |why: &str| ApiError::BadRequest(format!("invalid report: {why}"));
-        let event: Event = serde_json::from_slice(body).map_err(|_| refuse("not a Nostr event"))?;
-        if event.kind != REPORT_KIND {
+        let event = Event::from_json(body).map_err(|_| refuse("not a Nostr event"))?;
+        if event.kind.as_u16() != REPORT_KIND {
             return Err(refuse("kind must be 1984"));
         }
         let mut blobs: Vec<(BlobHash, String)> = Vec::new();
-        for tag in &event.tags {
+        for tag in event.tags.iter().map(Tag::as_slice) {
             if tag.first().map(String::as_str) != Some("x") {
                 continue;
             }
@@ -50,10 +51,12 @@ impl Report {
         if blobs.is_empty() {
             return Err(refuse("no x tag with a sha256 hash"));
         }
-        verify_signature(&event).map_err(refuse)?;
+        event
+            .verify()
+            .map_err(|_| refuse("the event's id or signature is wrong"))?;
         Ok(Self {
-            event_id: event.id.to_ascii_lowercase(),
-            reporter: event.pubkey.to_ascii_lowercase(),
+            event_id: event.id.to_hex(),
+            reporter: event.pubkey.to_hex(),
             blobs,
             content: event.content,
             raw: String::from_utf8_lossy(body).into_owned(),

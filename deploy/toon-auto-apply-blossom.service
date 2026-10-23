@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply the merged TOON blossom node bundle (fast-forward, compose up)
+Documentation=https://github.com/toon-protocol/blossom/blob/main/README.md#deployment
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/blossom/deploy/auto-apply.sh
+# The script takes its own flock; this only stops systemd stacking runs.
+TimeoutStartSec=600

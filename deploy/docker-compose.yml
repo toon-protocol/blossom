@@ -13,7 +13,7 @@ name: blossom
 services:
   connector:
     # An immutable pin: it moves by a reviewed commit here, never by a floating tag.
-    image: ghcr.io/toon-protocol/connector:rust-2026.09.29.1
+    image: ghcr.io/toon-protocol/connector:rust-2026.10.23.1
     command: ['/app/config/connector.toml']
     volumes:
       - ./connector.toml:/app/config/connector.toml:ro

@@ -49,7 +49,7 @@ fn own_bundle_runs_connector_blob_app_and_caddy() {
 }
 
 /// One immutable connector build, moved only by a reviewed commit here and in the compose file.
-const EXPECTED_CONNECTOR_IMAGE: &str = "ghcr.io/toon-protocol/connector:rust-2026.09.29.1";
+const EXPECTED_CONNECTOR_IMAGE: &str = "ghcr.io/toon-protocol/connector:rust-2026.10.23.1";
 
 /// `rust-sha-<commit>` or `rust-<YYYY.MM.DD.N>`: tags nothing ever repoints.
 fn is_immutable_connector_tag(tag: &str) -> bool {

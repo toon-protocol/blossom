@@ -1064,6 +1064,31 @@ fn a_mirror_the_guard_refuses_is_refused() {
 }
 
 #[test]
+fn a_mirror_of_the_connector_by_name_is_refused() {
+    // In a bundle the connector is `connector` on the compose network. Only a container can be
+    // given that name, so against the binary there is nothing to resolve.
+    if !App::is_image() {
+        eprintln!("skipped: only a container resolves `connector`");
+        return;
+    }
+    let body = random_blob(100);
+    let app = App::start_with(&OPEN_CAP);
+    let signer = Signer::random();
+    for url in ["https://connector:4000/blob", "https://connector/blob"] {
+        let response = mirror(&app, &signer, &body, url);
+        assert_eq!(status(&response), 400, "{url}");
+        assert!(
+            response
+                .text()
+                .unwrap()
+                .contains(&format!("resolves to {}", common::CONNECTOR_ADDRESS)),
+            "{url}"
+        );
+    }
+    assert!(listed(&app, &signer.pubkey()).is_empty());
+}
+
+#[test]
 fn a_mirror_that_redirects_to_a_refused_address_is_refused() {
     let body = random_blob(100);
     let front = Source::serve(Vec::new());

@@ -78,6 +78,11 @@ impl App {
         Self::spawn_in(storage, 3600, 3600, settings)
     }
 
+    /// Whether the suite runs against an image, where `connector` resolves as it does in a bundle.
+    pub fn is_image() -> bool {
+        std::env::var_os("BLOSSOM_TEST_IMAGE").is_some()
+    }
+
     fn spawn(retention_secs: u32, sweep_secs: u32, settings: &[&str]) -> Self {
         Self::spawn_in(
             tempfile::tempdir().unwrap(),
@@ -157,6 +162,9 @@ impl Drop for App {
     }
 }
 
+/// Where a container finds `connector`, as the bundle's compose network would give it one.
+pub const CONNECTOR_ADDRESS: &str = "172.18.0.2";
+
 /// Containers this test process has started, so each gets its own name.
 static STARTED: AtomicU32 = AtomicU32::new(0);
 
@@ -189,6 +197,7 @@ impl Launch {
         command
             .args(["run", "--rm", "--network", "host", "--name", &name])
             .args(["--user", &format!("{}:{}", owner.uid(), owner.gid())])
+            .args(["--add-host", &format!("connector:{CONNECTOR_ADDRESS}")])
             .args(["--volume", &mount])
             .arg(image);
         Self {

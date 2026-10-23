@@ -89,19 +89,19 @@ impl Holdings {
     pub fn keep_report(&self, report: &Report, now: u64) -> rusqlite::Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        for (hash, report_type) in &report.blobs {
+        for (hash, report_type) in report.blobs() {
             tx.execute(
                 "INSERT OR IGNORE INTO reports
                      (event_id, sha256, reporter, report_type, content, received_at, event)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
-                    report.event_id,
+                    report.event_id(),
                     hash.as_str(),
-                    report.reporter,
+                    report.reporter(),
                     report_type,
-                    report.content,
+                    report.content(),
                     now,
-                    report.raw
+                    report.raw()
                 ],
             )?;
         }
@@ -161,9 +161,9 @@ impl Holdings {
                 hash.as_str(),
                 owner,
                 expires_at,
-                payment.payer,
-                payment.amount.to_string(),
-                payment.chain
+                payment.payer(),
+                payment.amount().to_string(),
+                payment.chain()
             ],
         )?;
         let sunset: u64 = tx.query_row(
@@ -330,11 +330,15 @@ mod tests {
     use super::*;
 
     fn payment() -> Payment {
-        Payment {
-            payer: "p".into(),
-            amount: 1010,
-            chain: "c".into(),
-        }
+        let headers: axum::http::HeaderMap = [
+            ("x-toon-payer", "p"),
+            ("x-toon-amount", "1010"),
+            ("x-toon-chain", "c"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.parse().unwrap(), v.parse().unwrap()))
+        .collect();
+        Payment::from_headers(&headers).unwrap()
     }
 
     #[test]

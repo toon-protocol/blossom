@@ -12,12 +12,17 @@ const AUTH_KIND: u16 = 24242;
 /// A verified authorization: who signed it, and which blob hashes it covers.
 #[derive(Debug)]
 pub struct Authorization {
-    /// The signer's pubkey (64 hex characters). This is the blob's owner.
-    pub owner: String,
+    owner: String,
     hashes: Vec<BlobHash>,
 }
 
 impl Authorization {
+    /// The signer's pubkey (64 hex characters). This is the blob's owner.
+    #[must_use]
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
     #[must_use]
     pub fn covers(&self, hash: &BlobHash) -> bool {
         self.hashes.contains(hash)
@@ -141,7 +146,7 @@ mod tests {
     fn accepts_a_valid_authorization() {
         let h = header(AUTH_KIND, &good_tags(), NOW - 1, false);
         let auth = Authorization::verify(Some(&h), NOW, "blobs.test").unwrap();
-        assert_eq!(auth.owner.len(), 64);
+        assert_eq!(auth.owner().len(), 64);
     }
 
     #[test]

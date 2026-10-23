@@ -16,16 +16,42 @@ const MAX_REPORT_BYTES: usize = 64 * 1024;
 /// A verified report: who made it, which blobs it names and why.
 #[derive(Debug)]
 pub struct Report {
-    pub event_id: String,
-    pub reporter: String,
-    /// Each reported blob with the report type from its `x` tag (`""` when the tag has none).
-    pub blobs: Vec<(BlobHash, String)>,
-    pub content: String,
-    /// The event exactly as received.
-    pub raw: String,
+    event_id: String,
+    reporter: String,
+    blobs: Vec<(BlobHash, String)>,
+    content: String,
+    raw: String,
 }
 
 impl Report {
+    #[must_use]
+    pub fn event_id(&self) -> &str {
+        &self.event_id
+    }
+
+    /// The pubkey that signed the report.
+    #[must_use]
+    pub fn reporter(&self) -> &str {
+        &self.reporter
+    }
+
+    /// Each reported blob with the report type from its `x` tag (`""` when the tag has none).
+    #[must_use]
+    pub fn blobs(&self) -> &[(BlobHash, String)] {
+        &self.blobs
+    }
+
+    #[must_use]
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    /// The event exactly as received.
+    #[must_use]
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
     /// Parses and verifies a report event.
     ///
     /// # Errors
@@ -112,8 +138,8 @@ mod tests {
     #[test]
     fn accepts_a_signed_report_and_reads_its_blob_and_type() {
         let report = Report::parse(&event(1984, &[&["x", X, "spam"]], false)).unwrap();
-        assert_eq!(report.blobs[0].0.as_str(), X);
-        assert_eq!(report.blobs[0].1, "spam");
+        assert_eq!(report.blobs()[0].0.as_str(), X);
+        assert_eq!(report.blobs()[0].1, "spam");
     }
 
     #[test]

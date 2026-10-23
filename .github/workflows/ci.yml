@@ -17,6 +17,8 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked --lib --bins
+      # Checked types cannot be built without their checks: each forbidden construction must not compile.
+      - run: cargo test --locked --test compile_fail
       # The black-box suite starts the binary directly and talks only to its two ports.
       - run: cargo test --locked --test blackbox
       # The bundle files: compose, connector.toml and the Caddyfile.

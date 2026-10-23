@@ -189,7 +189,7 @@ pub async fn media(
                 &job_hash,
                 size,
                 content_type,
-                &authorization.owner,
+                authorization.owner(),
                 &payment,
                 now(),
                 retention,
